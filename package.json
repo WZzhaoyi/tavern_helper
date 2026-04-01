@@ -106,6 +106,9 @@
     "zod": "^4.3.6"
   },
   "pnpm": {
+    "overrides": {
+      "axios": "^1.9.0"
+    },
     "onlyBuiltDependencies": [
       "@parcel/watcher",
       "@tailwindcss/oxide",
