@@ -166,13 +166,14 @@ AI：我今天心情很好！_.set("角色名.好感度",50,55) _.set("角色名
    - **回退机制**：当消息被编辑时，自动回退旧的状态更新，应用新的更新
    - 使用差值（delta）更新，避免 oldValue 不准确导致的问题
 
-4. **静态定义替换**：
-   - 在 `CHAT_COMPLETION_PROMPT_READY` 事件中，把 prompt 中的 `<character_states>` 标签原地替换为仅包含状态定义的文本（状态名 + 各区间 min/max/content）
+4. **当前 content 替换**：
+   - 在 `CHAT_COMPLETION_PROMPT_READY` 事件中，把 prompt 中的 `<character_states>` 标签原地替换为当前匹配区间的 content（不暴露其他区间）
+   - 区间内数值波动不影响该文本，仅在跨区间转移时变化
 
 5. **当前状态末端注入**：
-   - 在 `CHAT_COMPLETION_PROMPT_READY` 事件中，直接修改 `event_data.chat`，把"当前角色状态"作为一条 system 消息追加到聊天末尾
+   - 在 `CHAT_COMPLETION_PROMPT_READY` 事件中，直接修改 `event_data.chat`，把"当前状态值与边界"作为一条 system 消息追加到聊天末尾
    - 由 `inject_current_state_at_end` 开关控制
-   - 状态信息格式：`[角色状态: 角色.状态名1 = 值1（min=… max=…）\ncontent1, …]`
+   - 状态信息格式：`[角色状态: 角色.状态名1 = 值1（min=… max=…）, …]`
 
 5. **变量替换**：
    - 在世界书或其他地方使用 `{{character_states.角色名.状态名}}` 格式的变量
