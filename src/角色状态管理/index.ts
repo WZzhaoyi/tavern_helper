@@ -1,6 +1,6 @@
 /**
  * 角色状态管理脚本
- * 
+ *
  * 功能：
  * 1. 从 prompt 中自动解析状态定义（通过 <character_states> 标签）
  * 2. 每个角色可以有一个或多个状态变量，每个状态在不同数值区间有不同content
@@ -10,16 +10,19 @@
  *    - 标签内的 _.set 语句会被解析，使用差值 delta = newValue - oldValue 作为初始值（统一逻辑）
  *    - 每个角色的每个状态只有在不存在时才初始化
  * 4. 状态更新由 LLM API 输出中的 _.set("角色名.状态名",oldvalue,newvalue) 触发
- * 5. 在 prompt 发送前将 <character_states> 标签替换为当前状态值的 content（节省 token）
- * 
+ * 5. 在 prompt 发送前：
+ *    - 把 <character_states> 标签原地替换为仅含静态定义的稳定文本
+ *    - 把"当前状态数值"作为一条 system 消息追加到聊天末端
+ *
  * 事件监听说明：
  * - CHAT_COMPLETION_PROMPT_READY: prompt准备完成，此时可以获取完整的消息数组（包括system消息），在此完成：
  *   1. 解析状态定义（每次生成前都重新解析，支持用户在不同消息中发送不同角色的状态定义）
  *   2. 初始化状态变量（从所有 assistant 消息的 <character_states_init> 标签中提取初始值，或默认为0）
- *   3. 直接修改消息内容，使用字符串替换替换 <character_states> 标签
+ *   3. 直接修改消息内容，把 <character_states> 标签替换为静态状态定义文本
+ *   4. 在 event_data.chat 末尾追加一条 system 消息，写入当前状态数值
  * - MESSAGE_RECEIVED: 消息接收后，解析并应用状态更新（内置重复触发检测，跳过开场白）
  * - MESSAGE_UPDATED: 消息更新后，解析并应用状态更新（用户可能编辑消息，内置重复触发检测，跳过开场白）
- * 
+ *
  * 冲突避免：
  * - 开场白（message_id = 0）中的状态更新语句不会被状态更新流程处理（跳过 message_id = 0）
  * - 初始化只在状态变量不存在时执行，不会覆盖已有状态
@@ -31,11 +34,10 @@ import indexVue from './index.vue';
 import { useSettingsStore } from './settings';
 import {
   applyStateUpdate,
+  buildCurrentStatesText,
   devLog,
   devWarn,
   getAllInitialValuesFromInitTag,
-  getCurrentStateValue,
-  getStateObject,
   initializeStates,
   parseAllStateDefinitionsFromPrompt,
   parseStateUpdates,
@@ -212,37 +214,14 @@ $(() => {
       }
     }
 
-    if (settingsStore.settings.inject_state_info && allDefinitions.length > 0) {
-      const allStateTexts: string[] = [];
-      const processedChars = new Set<string>();
-      for (const def of allDefinitions) {
-        if (processedChars.has(def.characterName)) continue;
-        processedChars.add(def.characterName);
-
-        const stateTexts = def.states.map(stateDef => {
-          const stateValue = getCurrentStateValue(def.characterName, stateDef.name);
-          const stateObject = getStateObject(stateValue, stateDef.ranges);
-          return stateObject?.content
-            ? `${def.characterName}.${stateDef.name} = ${stateValue}（min=${stateObject.min} max=${stateObject.max}）\n${stateObject.content}`
-            : `${def.characterName}.${stateDef.name} = ${stateValue}`;
+    if (settingsStore.settings.inject_current_state_at_end) {
+      const stateInfoText = buildCurrentStatesText(allDefinitions);
+      if (stateInfoText) {
+        event_data.chat.push({
+          role: 'system',
+          content: stateInfoText,
         });
-        allStateTexts.push(...stateTexts);
-      }
-
-      if (allStateTexts.length > 0) {
-        injectPrompts(
-          [
-            {
-              id: 'character_state_info',
-              role: 'system',
-              content: `[角色状态: ${allStateTexts.join(', ')}]`,
-              position: 'in_chat',
-              depth: 0,
-              should_scan: false,
-            },
-          ],
-          { once: true },
-        );
+        devLog('已在聊天末尾追加当前角色状态信息');
       }
     }
   });
