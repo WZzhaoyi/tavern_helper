@@ -21,8 +21,7 @@ export const Settings = z
   .object({
     // 是否启用角色状态管理
     enabled: z.boolean().default(true),
-    // 是否在聊天末尾追加一条 system 消息，写入当前角色状态。
-    // 末端追加不会污染前缀缓存命中率（旧字段名为 inject_state_info）。
+    // 是否在聊天末尾追加一条 system 消息，写入当前角色状态
     inject_current_state_at_end: z.boolean().default(true),
     // 开发模式：是否打印详细日志
     dev_mode: z.boolean().default(false),

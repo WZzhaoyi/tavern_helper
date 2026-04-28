@@ -13,7 +13,7 @@
 
         <div class="flex-container">
           <input v-model="settings.inject_current_state_at_end" type="checkbox" />
-          <label>在聊天末尾注入当前状态信息（缓存友好）</label>
+          <label>在聊天末尾注入当前状态信息</label>
         </div>
 
         <div class="flex-container">
@@ -54,9 +54,9 @@
             <br />
             - 初始化使用差值逻辑：初始值 = newValue - oldValue（与状态更新保持一致）
             <br />
-            - <code>&lt;character_states&gt;</code> 标签会在发送前被替换为<strong>静态状态定义</strong>（仅含状态名与各区间 content），跨轮恒定，不破坏前缀缓存
+            - <code>&lt;character_states&gt;</code> 标签会在发送前被替换为静态状态定义（状态名与各区间 content）
             <br />
-            - 当前状态数值通过"在聊天末尾注入当前状态信息"开关，作为 system 消息追加到聊天末端，避免污染缓存前缀
+            - 当前状态数值通过"在聊天末尾注入当前状态信息"开关，作为 system 消息追加到聊天末端
             <br />
             - 只有 <code>&lt;character_states_init&gt;</code> 标签内的 <code>_.set</code> 用于初始化，其他位置作为状态更新处理
           </small>

@@ -210,15 +210,8 @@ export function parseAllStateDefinitionsFromPrompt(
 }
 
 /**
- * 把 prompt 中的 <character_states> 标签替换为**仅包含静态定义**的稳定文本。
- *
- * 设计理由（缓存命中率）：
- * - 该标签通常位于角色描述/世界书等前缀区。Anthropic 等 LLM 的 prompt cache 是
- *   前缀匹配，前缀任何字节变化都会让后续上下文失去缓存。
- * - 若在此处写入"当前状态值"，每次状态变化都会让前缀变化，导致缓存命中率塌方。
- * - 因此这里只输出"状态名 + 各区间(min/max/content)"等跨轮恒定的内容。
- * - 当前状态值由 buildCurrentStatesText() 构造，并在聊天末端追加一条 system 消息，
- *   不污染缓存前缀。
+ * 把 <character_states> 标签替换为仅含状态定义的稳定文本
+ * （状态名 + 各区间 min/max/content）。当前数值由 buildCurrentStatesText 单独输出。
  */
 export function replaceCharacterStatesTagsInText(
   text: string,
@@ -267,7 +260,6 @@ export function replaceCharacterStatesTagsInText(
 
 /**
  * 构造"当前角色状态"文本，用于在聊天末端追加为一条 system 消息。
- * 末端追加不会破坏前缀缓存。
  */
 export function buildCurrentStatesText(
   stateDefinitions: Array<{

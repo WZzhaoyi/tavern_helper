@@ -11,20 +11,15 @@
  *    - 每个角色的每个状态只有在不存在时才初始化
  * 4. 状态更新由 LLM API 输出中的 _.set("角色名.状态名",oldvalue,newvalue) 触发
  * 5. 在 prompt 发送前：
- *    - 把 <character_states> 标签原地替换为**仅含静态定义**的稳定文本（跨轮恒定，缓存友好）
- *    - 把"当前状态数值"作为一条 system 消息追加到聊天**末端**（不污染前缀缓存）
- *
- * 缓存命中率说明：
- * - LLM API（如 Anthropic）的 prompt cache 是前缀匹配，前缀任何字节变化都会让后续上下文失去缓存
- * - 因此前缀区只放静态状态定义，把每轮都会变的当前数值放在末端
- * - 末端注入由 inject_current_state_at_end 开关控制
+ *    - 把 <character_states> 标签原地替换为仅含静态定义的稳定文本
+ *    - 把"当前状态数值"作为一条 system 消息追加到聊天末端
  *
  * 事件监听说明：
  * - CHAT_COMPLETION_PROMPT_READY: prompt准备完成，此时可以获取完整的消息数组（包括system消息），在此完成：
  *   1. 解析状态定义（每次生成前都重新解析，支持用户在不同消息中发送不同角色的状态定义）
  *   2. 初始化状态变量（从所有 assistant 消息的 <character_states_init> 标签中提取初始值，或默认为0）
  *   3. 直接修改消息内容，把 <character_states> 标签替换为静态状态定义文本
- *   4. 直接 push 一条 system 消息到 event_data.chat 末尾，写入当前状态数值
+ *   4. 在 event_data.chat 末尾追加一条 system 消息，写入当前状态数值
  * - MESSAGE_RECEIVED: 消息接收后，解析并应用状态更新（内置重复触发检测，跳过开场白）
  * - MESSAGE_UPDATED: 消息更新后，解析并应用状态更新（用户可能编辑消息，内置重复触发检测，跳过开场白）
  *
@@ -219,11 +214,6 @@ $(() => {
       }
     }
 
-    // 在聊天末尾追加一条 system 消息，写入"当前角色状态"。
-    // 直接修改 event_data.chat 末尾元素，不会破坏前缀缓存命中率。
-    // 旧实现使用 injectPrompts 在 CHAT_COMPLETION_PROMPT_READY 内调用，
-    // 但该事件已经是 prompt 组装完成之后触发，injectPrompts 对本轮无效，
-    // 因此改为直接 push 到 event_data.chat。
     if (settingsStore.settings.inject_current_state_at_end) {
       const stateInfoText = buildCurrentStatesText(allDefinitions);
       if (stateInfoText) {
