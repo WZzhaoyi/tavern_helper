@@ -209,6 +209,17 @@ export function parseAllStateDefinitionsFromPrompt(
   return allDefinitions;
 }
 
+/**
+ * 把 prompt 中的 <character_states> 标签替换为**仅包含静态定义**的稳定文本。
+ *
+ * 设计理由（缓存命中率）：
+ * - 该标签通常位于角色描述/世界书等前缀区。Anthropic 等 LLM 的 prompt cache 是
+ *   前缀匹配，前缀任何字节变化都会让后续上下文失去缓存。
+ * - 若在此处写入"当前状态值"，每次状态变化都会让前缀变化，导致缓存命中率塌方。
+ * - 因此这里只输出"状态名 + 各区间(min/max/content)"等跨轮恒定的内容。
+ * - 当前状态值由 buildCurrentStatesText() 构造，并在聊天末端追加一条 system 消息，
+ *   不污染缓存前缀。
+ */
 export function replaceCharacterStatesTagsInText(
   text: string,
   stateDefinitions: Array<{
@@ -238,11 +249,10 @@ export function replaceCharacterStatesTagsInText(
     const allStateContents: string[] = [];
     for (const char of characters) {
       char.states.forEach(stateDef => {
-        const stateValue = getCurrentStateValue(char.characterName, stateDef.name);
-        const stateObject = getStateObject(stateValue, stateDef.ranges);
-        if (stateObject) {
-          allStateContents.push(`${char.characterName}.${stateDef.name} = ${stateValue}（last_state=${stateObject.min} next_state=${stateObject.max}）\n${stateObject.content}`);
-        }
+        const rangeLines = stateDef.ranges.map(
+          range => `  [${range.min}, ${range.max}]: ${range.content}`,
+        );
+        allStateContents.push(`${char.characterName}.${stateDef.name}:\n${rangeLines.join('\n')}`);
       });
     }
 
@@ -253,6 +263,43 @@ export function replaceCharacterStatesTagsInText(
   }
 
   return result;
+}
+
+/**
+ * 构造"当前角色状态"文本，用于在聊天末端追加为一条 system 消息。
+ * 末端追加不会破坏前缀缓存。
+ */
+export function buildCurrentStatesText(
+  stateDefinitions: Array<{
+    characterName: string;
+    states: Array<{ name: string; ranges: Array<{ min: number; max: number; content: string }> }>;
+  }>,
+): string | null {
+  if (stateDefinitions.length === 0) {
+    return null;
+  }
+
+  const allStateTexts: string[] = [];
+  const processedChars = new Set<string>();
+  for (const def of stateDefinitions) {
+    if (processedChars.has(def.characterName)) continue;
+    processedChars.add(def.characterName);
+
+    for (const stateDef of def.states) {
+      const stateValue = getCurrentStateValue(def.characterName, stateDef.name);
+      const stateObject = getStateObject(stateValue, stateDef.ranges);
+      allStateTexts.push(
+        stateObject?.content
+          ? `${def.characterName}.${stateDef.name} = ${stateValue}（min=${stateObject.min} max=${stateObject.max}）\n${stateObject.content}`
+          : `${def.characterName}.${stateDef.name} = ${stateValue}`,
+      );
+    }
+  }
+
+  if (allStateTexts.length === 0) {
+    return null;
+  }
+  return `[角色状态: ${allStateTexts.join(', ')}]`;
 }
 
 export function getAllStatesDisplay(
