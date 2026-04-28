@@ -11,15 +11,15 @@
  *    - 每个角色的每个状态只有在不存在时才初始化
  * 4. 状态更新由 LLM API 输出中的 _.set("角色名.状态名",oldvalue,newvalue) 触发
  * 5. 在 prompt 发送前：
- *    - 把 <character_states> 标签原地替换为仅含静态定义的稳定文本
- *    - 把"当前状态数值"作为一条 system 消息追加到聊天末端
+ *    - 把 <character_states> 标签原地替换为当前匹配区间的 content（不暴露其他区间）
+ *    - 把"当前状态值与边界"作为一条 system 消息追加到聊天末端
  *
  * 事件监听说明：
  * - CHAT_COMPLETION_PROMPT_READY: prompt准备完成，此时可以获取完整的消息数组（包括system消息），在此完成：
  *   1. 解析状态定义（每次生成前都重新解析，支持用户在不同消息中发送不同角色的状态定义）
  *   2. 初始化状态变量（从所有 assistant 消息的 <character_states_init> 标签中提取初始值，或默认为0）
- *   3. 直接修改消息内容，把 <character_states> 标签替换为静态状态定义文本
- *   4. 在 event_data.chat 末尾追加一条 system 消息，写入当前状态数值
+ *   3. 直接修改消息内容，把 <character_states> 标签替换为当前匹配区间的 content
+ *   4. 在 event_data.chat 末尾追加一条 system 消息，写入当前状态值与边界
  * - MESSAGE_RECEIVED: 消息接收后，解析并应用状态更新（内置重复触发检测，跳过开场白）
  * - MESSAGE_UPDATED: 消息更新后，解析并应用状态更新（用户可能编辑消息，内置重复触发检测，跳过开场白）
  *

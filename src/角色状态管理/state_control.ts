@@ -210,8 +210,8 @@ export function parseAllStateDefinitionsFromPrompt(
 }
 
 /**
- * 把 <character_states> 标签替换为仅含状态定义的稳定文本
- * （状态名 + 各区间 min/max/content）。当前数值由 buildCurrentStatesText 单独输出。
+ * 把 <character_states> 标签替换为当前匹配区间的 content。
+ * 跨区间转移时才会变化，区间内的数值波动不影响该文本。
  */
 export function replaceCharacterStatesTagsInText(
   text: string,
@@ -242,10 +242,11 @@ export function replaceCharacterStatesTagsInText(
     const allStateContents: string[] = [];
     for (const char of characters) {
       char.states.forEach(stateDef => {
-        const rangeLines = stateDef.ranges.map(
-          range => `  [${range.min}, ${range.max}]: ${range.content}`,
-        );
-        allStateContents.push(`${char.characterName}.${stateDef.name}:\n${rangeLines.join('\n')}`);
+        const stateValue = getCurrentStateValue(char.characterName, stateDef.name);
+        const stateObject = getStateObject(stateValue, stateDef.ranges);
+        if (stateObject) {
+          allStateContents.push(`${char.characterName}.${stateDef.name}:\n${stateObject.content}`);
+        }
       });
     }
 
@@ -259,7 +260,8 @@ export function replaceCharacterStatesTagsInText(
 }
 
 /**
- * 构造"当前角色状态"文本，用于在聊天末端追加为一条 system 消息。
+ * 构造"当前角色状态"文本（值 + 边界），用于在聊天末端追加为一条 system 消息。
+ * content 已由 replaceCharacterStatesTagsInText 在前缀输出，此处不重复。
  */
 export function buildCurrentStatesText(
   stateDefinitions: Array<{
@@ -281,8 +283,8 @@ export function buildCurrentStatesText(
       const stateValue = getCurrentStateValue(def.characterName, stateDef.name);
       const stateObject = getStateObject(stateValue, stateDef.ranges);
       allStateTexts.push(
-        stateObject?.content
-          ? `${def.characterName}.${stateDef.name} = ${stateValue}（min=${stateObject.min} max=${stateObject.max}）\n${stateObject.content}`
+        stateObject
+          ? `${def.characterName}.${stateDef.name} = ${stateValue}（min=${stateObject.min} max=${stateObject.max}）`
           : `${def.characterName}.${stateDef.name} = ${stateValue}`,
       );
     }
