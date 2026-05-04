@@ -1,0 +1,38 @@
+name: pr_validate
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for unresolved merge conflict markers
+        run: |
+          if git --no-pager grep -nE '^(<<<<<<< |=======$|>>>>>>> )' -- ':!.github/workflows/pr_validate.yaml'; then
+            echo "::error::Found unresolved merge conflict markers in tracked files."
+            exit 1
+          fi
+
+      - name: Validate package.json is parseable JSON
+        run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf8'))"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install with frozen lockfile
+        run: pnpm install --frozen-lockfile
