@@ -2,6 +2,7 @@ const Settings = z
   .object({
     enabled: z.boolean().default(false),
     max_depth: z.number().int().min(1).default(20),
+    dev_mode: z.boolean().default(false),
   })
   .prefault({});
 

@@ -23,6 +23,11 @@
           />
         </div>
 
+        <div class="flex-container">
+          <input id="chat_depth_dev_mode" v-model="settings.dev_mode" type="checkbox" />
+          <label for="chat_depth_dev_mode">开发模式（显示详细日志）</label>
+        </div>
+
         <small>限制发送给 AI 的聊天消息数量，为 Chat Example 留出空间。</small>
 
         <hr class="sysHR" />
