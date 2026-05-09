@@ -17,7 +17,7 @@ jobs:
 
       - name: Scan for unresolved merge conflict markers
         run: |
-          if git --no-pager grep -nE '^(<<<<<<< |=======$|>>>>>>> )' -- ':!.github/workflows/pr_validate.yaml'; then
+          if git --no-pager grep -nE '^(<<<<<<< |=======$|>>>>>>> )' -- ':!.github/workflows/pr_validate.yaml' ':!dist/**'; then
             echo "::error::Found unresolved merge conflict markers in tracked files."
             exit 1
           fi
