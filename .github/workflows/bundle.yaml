@@ -1,7 +1,7 @@
 name: bundle
 
 on:
-  push:
+  pull_request:
     branches:
       - master
       - main
@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
       - uses: JesseTG/rm@v1.0.3
         with:
           path: dist
@@ -53,11 +55,12 @@ jobs:
           message: '[bot] bundle'
 
       # 自动打版本 tag, 从而让 jsdelivr 基于版本号在 12h 内更新缓存而不是用非版本号的 7d 缓存
+      # 仅在手动触发时打 tag，PR 合并后不自动打 tag
       - id: autotag
-        if: github.repository != 'StageDog/tavern_helper_template'
+        if: github.event_name == 'workflow_dispatch' && github.repository != 'StageDog/tavern_helper_template'
         uses: phish108/autotag-action@v1.1.64
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           with-v: true
-      - if: ${{ github.repository != 'StageDog/tavern_helper_template' && steps.autotag.outputs.tag != '0.0.0' && steps.autotag.outputs.new-tag != steps.autotag.outputs.tag }}
+      - if: ${{ github.event_name == 'workflow_dispatch' && github.repository != 'StageDog/tavern_helper_template' && steps.autotag.outputs.tag != '0.0.0' && steps.autotag.outputs.new-tag != steps.autotag.outputs.tag }}
         run: git push --delete origin ${{ steps.autotag.outputs.tag }}
