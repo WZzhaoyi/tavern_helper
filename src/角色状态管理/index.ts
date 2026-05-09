@@ -168,7 +168,7 @@ $(() => {
     }
 
     // 2. 解析状态定义（用于后续的标签替换）
-    const allDefinitions = parseAllStateDefinitionsFromPrompt(promptText);
+    const allDefinitions = parseAllStateDefinitionsFromPrompt(promptText, settingsStore.settings.use_yaml);
     if (allDefinitions.length === 0) {
       return;
     }

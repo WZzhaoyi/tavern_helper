@@ -23,6 +23,8 @@ export const Settings = z
     enabled: z.boolean().default(true),
     // 是否在聊天末尾追加一条 system 消息，写入当前角色状态
     inject_current_state_at_end: z.boolean().default(true),
+    // 是否使用 YAML 格式解析 <character_states> 标签内容
+    use_yaml: z.boolean().default(false),
     // 开发模式：是否打印详细日志
     dev_mode: z.boolean().default(false),
   })

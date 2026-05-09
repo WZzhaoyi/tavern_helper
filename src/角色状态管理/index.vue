@@ -17,6 +17,11 @@
         </div>
 
         <div class="flex-container">
+          <input v-model="settings.use_yaml" type="checkbox" />
+          <label>使用 YAML 格式解析状态定义</label>
+        </div>
+
+        <div class="flex-container">
           <input v-model="settings.dev_mode" type="checkbox" />
           <label>开发模式（显示详细日志）</label>
         </div>
@@ -36,27 +41,48 @@
           <small>
             <strong>状态定义：</strong>从 prompt 中的 <code>&lt;character_states&gt;</code> 标签自动解析。
             <br />
-            <code>&lt;character_states&gt;{ "name": "character_states", "characters": [{ "name": "角色名", "states": [{ "name": "状态名", "ranges": [{ "min": 0, "max": 30, "content": "内容" }] }] }] }&lt;/character_states&gt;</code>
+            <strong>JSON 格式（默认）：</strong>
+            <br />
+            <code>&lt;character_states&gt;{ &quot;name&quot;: &quot;character_states&quot;, &quot;characters&quot;: [{ &quot;name&quot;: &quot;角色名&quot;, &quot;states&quot;: [{ &quot;name&quot;: &quot;状态名&quot;, &quot;ranges&quot;: [{ &quot;min&quot;: 0, &quot;max&quot;: 30, &quot;content&quot;: &quot;内容&quot; }] }] }] }&lt;/character_states&gt;</code>
+            <br />
+            <br />
+            <strong>YAML 格式（需开启 YAML 开关）：</strong>
+            <br />
+            <code>
+              &lt;character_states&gt;
+              name: character_states
+              characters:
+              &nbsp;&nbsp;- name: 角色名
+              &nbsp;&nbsp;&nbsp;&nbsp;states:
+              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- name: 状态名
+              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ranges:
+              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- min: 0
+              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;max: 30
+              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;content: "内容"
+              &lt;/character_states&gt;
+            </code>
             <br />
             <br />
             <strong>状态初始化：</strong>在任意 assistant 消息中使用 <code>&lt;character_states_init&gt;</code> 标签定义初始值。只要标签中存在某个角色的
             <code>_.set</code> 条目，就会自动初始化该角色。
             <br />
-            <code>&lt;character_states_init&gt;<br />_.set("角色名.状态名", 0, 50);<br />&lt;/character_states_init&gt;</code>
+            <code>&lt;character_states_init&gt;&lt;br /&gt;_.set(&quot;角色名.状态名&quot;, 0, 50);&lt;br /&gt;&lt;/character_states_init&gt;</code>
             <br />
             <br />
-            <strong>状态更新：</strong><code>_.set("角色名.状态名", oldvalue, newvalue)</code>
+            <strong>状态更新：</strong><code>_.set(&quot;角色名.状态名&quot;, oldvalue, newvalue)</code>
             <br />
             <strong>变量路径：</strong><code>character_states.角色名.状态名</code>
             <br />
             <br />
             <strong>说明：</strong>
             <br />
+            - 启用 YAML 后，请确保 &lt;character_states&gt; 内为 YAML 格式
+            <br />
             - 初始化使用差值逻辑：初始值 = newValue - oldValue（与状态更新保持一致）
             <br />
             - <code>&lt;character_states&gt;</code> 标签会在发送前被替换为当前匹配区间的 content
             <br />
-            - 当前状态值与边界通过"在聊天末尾注入当前状态信息"开关，作为 system 消息追加到聊天末端
+            - 当前状态值与边界通过&quot;在聊天末尾注入当前状态信息&quot;开关，作为 system 消息追加到聊天末端
             <br />
             - 只有 <code>&lt;character_states_init&gt;</code> 标签内的 <code>_.set</code> 用于初始化，其他位置作为状态更新处理
           </small>
