@@ -25,6 +25,8 @@
 
 在角色描述、世界书或其他 prompt 位置使用 `<character_states>` 标签定义状态：
 
+**JSON 格式（默认）：**
+
 ```json
 <character_states>
 {
@@ -40,13 +42,6 @@
             {"min": 31, "max": 70, "content": "角色对用户态度正常，保持礼貌"},
             {"min": 71, "max": 100, "content": "角色对用户态度友好，语气亲切"}
           ]
-        },
-        {
-          "name": "信任度",
-          "ranges": [
-            {"min": 0, "max": 50, "content": "角色对用户缺乏信任，不愿分享秘密"},
-            {"min": 51, "max": 100, "content": "角色对用户非常信任，愿意分享秘密"}
-          ]
         }
       ]
     }
@@ -55,7 +50,30 @@
 </character_states>
 ```
 
+**YAML 格式（需启用"使用 YAML 格式解析状态定义"开关）：**
+
+```yaml
+<character_states>
+name: character_states
+characters:
+  - name: 角色名
+    states:
+      - name: 好感度
+        ranges:
+          - min: 0
+            max: 30
+            content: 角色对用户态度冷淡，说话语气生硬
+          - min: 31
+            max: 70
+            content: 角色对用户态度正常，保持礼貌
+          - min: 71
+            max: 100
+            content: 角色对用户态度友好，语气亲切
+</character_states>
+```
+
 **注意**：
+- 启用 YAML 模式后，`JSON` 格式将不再被识别（请确保标签内格式与开关一致）
 - 每个角色可以定义多个状态
 - 每个状态可以有多个数值区间
 - 每个区间需要定义 min、max 和 content

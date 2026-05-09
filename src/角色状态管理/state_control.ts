@@ -1,3 +1,5 @@
+import YAML from 'yaml';
+
 const VARIABLE_TYPE = 'chat' as const;
 const STATE_PATH_PREFIX = 'character_states';
 
@@ -142,6 +144,7 @@ export function getStateObject(stateValue: number, ranges: Array<{ min: number; 
 
 export function parseAllStateDefinitionsFromPrompt(
   promptText: string,
+  useYaml: boolean = false,
 ): Array<{
   characterName: string;
   states: Array<{ name: string; ranges: Array<{ min: number; max: number; content: string }> }>;
@@ -180,7 +183,7 @@ export function parseAllStateDefinitionsFromPrompt(
             }>;
           }>;
         }>;
-      } = JSON.parse(content);
+      } = useYaml ? YAML.parse(content) : JSON.parse(content);
 
       if (stateConfig.name !== 'character_states' || !stateConfig.characters) {
         continue;
@@ -281,12 +284,13 @@ export function buildCurrentStatesText(
 
     for (const stateDef of def.states) {
       const stateValue = getCurrentStateValue(def.characterName, stateDef.name);
-      const stateObject = getStateObject(stateValue, stateDef.ranges);
-      allStateTexts.push(
-        stateObject
-          ? `${def.characterName}.${stateDef.name} = ${stateValue}（min=${stateObject.min} max=${stateObject.max}）`
-          : `${def.characterName}.${stateDef.name} = ${stateValue}`,
-      );
+      if (stateDef.ranges.length > 0) {
+        const globalMin = Math.min(...stateDef.ranges.map(r => r.min));
+        const globalMax = Math.max(...stateDef.ranges.map(r => r.max));
+        allStateTexts.push(`${def.characterName}.${stateDef.name} = ${stateValue}（min=${globalMin} max=${globalMax}）`);
+      } else {
+        allStateTexts.push(`${def.characterName}.${stateDef.name} = ${stateValue}`);
+      }
     }
   }
 
