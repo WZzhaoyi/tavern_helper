@@ -1,0 +1,37 @@
+name: tag_bundle
+
+on:
+  pull_request:
+    types:
+      - closed
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref == 'chore/bundle-dist' &&
+      github.event.pull_request.title == '[bot] bundle' &&
+      github.repository != 'StageDog/tavern_helper_template'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.BUNDLE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # 自动打版本 tag, 从而让 jsdelivr 基于版本号在 12h 内更新缓存而不是用非版本号的 7d 缓存
+      - id: autotag
+        uses: phish108/autotag-action@v1.1.64
+        with:
+          github-token: ${{ secrets.BUNDLE_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          with-v: true
+
+      - if: steps.autotag.outputs.tag != '0.0.0' && steps.autotag.outputs.new-tag != steps.autotag.outputs.tag
+        run: git push --delete origin ${{ steps.autotag.outputs.tag }}
