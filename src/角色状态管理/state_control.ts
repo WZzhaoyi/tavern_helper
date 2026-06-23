@@ -2,6 +2,47 @@ import YAML from 'yaml';
 
 const VARIABLE_TYPE = 'chat' as const;
 const STATE_PATH_PREFIX = 'character_states';
+export const CHARACTER_STATES_SNAPSHOT_KIND = 'tavern_helper.character_states.snapshot';
+export const CHARACTER_STATES_SNAPSHOT_VERSION = 1;
+
+export type CharacterStatesData = Record<string, Record<string, number>>;
+export type CharacterStatesImportMode = 'merge' | 'replace';
+export type CharacterStatesSnapshot = {
+  kind: typeof CHARACTER_STATES_SNAPSHOT_KIND;
+  version: typeof CHARACTER_STATES_SNAPSHOT_VERSION;
+  exported_at?: string;
+  chat_id?: string;
+  character_name?: string;
+  producer?: {
+    name: string;
+    version?: string;
+  };
+  states: CharacterStatesData;
+};
+
+const SafeStateKeySchema = z
+  .string()
+  .min(1)
+  .refine(key => !['__proto__', 'prototype', 'constructor'].includes(key), {
+    message: '状态快照中包含不安全的键名',
+  });
+const CharacterStatesDataSchema = z.record(SafeStateKeySchema, z.record(SafeStateKeySchema, z.number().finite()));
+const CharacterStatesSnapshotV1Schema = z
+  .object({
+    kind: z.literal(CHARACTER_STATES_SNAPSHOT_KIND),
+    version: z.literal(1),
+    exported_at: z.string().optional(),
+    chat_id: z.string().optional(),
+    character_name: z.string().optional(),
+    producer: z
+      .object({
+        name: z.string(),
+        version: z.string().optional(),
+      })
+      .optional(),
+    states: CharacterStatesDataSchema,
+  })
+  .passthrough();
 
 let getDevMode: (() => boolean) | null = null;
 
@@ -23,6 +64,129 @@ export function devWarn(...args: any[]): void {
 
 function getStatePath(characterName: string, stateName: string): string {
   return `${STATE_PATH_PREFIX}.${characterName}.${stateName}`;
+}
+
+function getCurrentSnapshotContext(): Pick<CharacterStatesSnapshot, 'chat_id' | 'character_name'> {
+  let chat_id: string | undefined;
+  let character_name: string | undefined;
+
+  try {
+    chat_id = SillyTavern.getCurrentChatId();
+  } catch (error) {
+    devWarn('获取当前聊天 ID 失败:', error);
+  }
+
+  try {
+    character_name = getCurrentCharacterName() ?? undefined;
+  } catch (error) {
+    devWarn('获取当前角色名失败:', error);
+  }
+
+  return { chat_id, character_name };
+}
+
+export function countCharacterStates(states: CharacterStatesData): number {
+  return Object.values(states).reduce((count, characterStates) => count + Object.keys(characterStates).length, 0);
+}
+
+export function createCharacterStatesSnapshot(): CharacterStatesSnapshot {
+  const context = getCurrentSnapshotContext();
+
+  return {
+    kind: CHARACTER_STATES_SNAPSHOT_KIND,
+    version: CHARACTER_STATES_SNAPSHOT_VERSION,
+    exported_at: new Date().toISOString(),
+    chat_id: context.chat_id,
+    character_name: context.character_name,
+    producer: {
+      name: '角色状态管理',
+    },
+    states: getAllCharactersStates(),
+  };
+}
+
+export function serializeCharacterStatesSnapshot(snapshot: CharacterStatesSnapshot): string {
+  return JSON.stringify(snapshot, null, 2);
+}
+
+export function normalizeCharacterStatesSnapshot(rawSnapshot: unknown): CharacterStatesSnapshot {
+  const snapshotParseResult = z
+    .object({
+      kind: z.literal(CHARACTER_STATES_SNAPSHOT_KIND),
+      version: z.number().int(),
+    })
+    .passthrough()
+    .safeParse(rawSnapshot);
+
+  if (snapshotParseResult.success) {
+    const { version } = snapshotParseResult.data;
+    if (version > CHARACTER_STATES_SNAPSHOT_VERSION) {
+      throw new Error(`不支持的角色状态快照版本: v${version}，当前最高支持 v${CHARACTER_STATES_SNAPSHOT_VERSION}`);
+    }
+
+    if (version === 1) {
+      return CharacterStatesSnapshotV1Schema.parse(rawSnapshot);
+    }
+
+    throw new Error(`不支持的角色状态快照版本: v${version}`);
+  }
+
+  const legacyStatesParseResult = CharacterStatesDataSchema.safeParse(rawSnapshot);
+  if (legacyStatesParseResult.success) {
+    return {
+      kind: CHARACTER_STATES_SNAPSHOT_KIND,
+      version: CHARACTER_STATES_SNAPSHOT_VERSION,
+      producer: {
+        name: 'legacy',
+      },
+      states: legacyStatesParseResult.data,
+    };
+  }
+
+  throw new Error('导入文件不是有效的角色状态快照');
+}
+
+export function getCharacterStatesSnapshotImportWarnings(snapshot: CharacterStatesSnapshot): string[] {
+  const context = getCurrentSnapshotContext();
+  const warnings: string[] = [];
+
+  if (snapshot.chat_id && context.chat_id && snapshot.chat_id !== context.chat_id) {
+    warnings.push(`快照来自聊天 ${snapshot.chat_id}，当前聊天是 ${context.chat_id}`);
+  }
+
+  if (snapshot.character_name && context.character_name && snapshot.character_name !== context.character_name) {
+    warnings.push(`快照来自角色 ${snapshot.character_name}，当前角色是 ${context.character_name}`);
+  }
+
+  return warnings;
+}
+
+export function importCharacterStatesSnapshot(
+  rawSnapshot: unknown,
+  mode: CharacterStatesImportMode,
+): { snapshot: CharacterStatesSnapshot; characterCount: number; stateCount: number } {
+  const snapshot = normalizeCharacterStatesSnapshot(rawSnapshot);
+
+  updateVariablesWith(
+    variables => {
+      if (mode === 'replace') {
+        _.set(variables, STATE_PATH_PREFIX, snapshot.states);
+        return variables;
+      }
+
+      const currentStatesParseResult = CharacterStatesDataSchema.safeParse(_.get(variables, STATE_PATH_PREFIX, {}));
+      const currentStates = currentStatesParseResult.success ? currentStatesParseResult.data : {};
+      _.set(variables, STATE_PATH_PREFIX, _.merge({}, currentStates, snapshot.states));
+      return variables;
+    },
+    { type: VARIABLE_TYPE },
+  );
+
+  return {
+    snapshot,
+    characterCount: Object.keys(snapshot.states).length,
+    stateCount: countCharacterStates(snapshot.states),
+  };
 }
 
 /**
@@ -69,8 +233,16 @@ export function initializeStates(
   }
 }
 
-export function parseStateUpdates(text: string): Array<{ characterName: string; stateName: string; delta: number; oldValue: number; newValue: number }> {
-  const updates: Array<{ characterName: string; stateName: string; delta: number; oldValue: number; newValue: number }> = [];
+export function parseStateUpdates(
+  text: string,
+): Array<{ characterName: string; stateName: string; delta: number; oldValue: number; newValue: number }> {
+  const updates: Array<{
+    characterName: string;
+    stateName: string;
+    delta: number;
+    oldValue: number;
+    newValue: number;
+  }> = [];
   const pattern = /_\.set\s*\(\s*(["'])([^"']+)\.([^"']+)\1\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)/gi;
   let match;
 
@@ -133,7 +305,10 @@ export function getCurrentStateValue(characterName: string, stateName: string): 
   return _.get(variables, statePath, 0);
 }
 
-export function getStateObject(stateValue: number, ranges: Array<{ min: number; max: number; content: string }>): { min: number; max: number; content: string } | null {
+export function getStateObject(
+  stateValue: number,
+  ranges: Array<{ min: number; max: number; content: string }>,
+): { min: number; max: number; content: string } | null {
   for (const range of ranges) {
     if (stateValue >= range.min && stateValue <= range.max) {
       return range;
@@ -228,7 +403,13 @@ export function replaceCharacterStatesTagsInText(
     return text;
   }
 
-  const tagGroups = new Map<string, Array<{ characterName: string; states: Array<{ name: string; ranges: Array<{ min: number; max: number; content: string }> }> }>>();
+  const tagGroups = new Map<
+    string,
+    Array<{
+      characterName: string;
+      states: Array<{ name: string; ranges: Array<{ min: number; max: number; content: string }> }>;
+    }>
+  >();
 
   for (const def of stateDefinitions) {
     if (!tagGroups.has(def.tagContent)) {
@@ -253,9 +434,10 @@ export function replaceCharacterStatesTagsInText(
       });
     }
 
-    const replacement = allStateContents.length > 0
-      ? `<character_states>\n${allStateContents.join('\n\n')}\n</character_states>`
-      : '<character_states>\n</character_states>';
+    const replacement =
+      allStateContents.length > 0
+        ? `<character_states>\n${allStateContents.join('\n\n')}\n</character_states>`
+        : '<character_states>\n</character_states>';
     result = result.replace(tagContent, replacement);
   }
 
@@ -287,7 +469,9 @@ export function buildCurrentStatesText(
       if (stateDef.ranges.length > 0) {
         const globalMin = Math.min(...stateDef.ranges.map(r => r.min));
         const globalMax = Math.max(...stateDef.ranges.map(r => r.max));
-        allStateTexts.push(`${def.characterName}.${stateDef.name} = ${stateValue}（min=${globalMin} max=${globalMax}）`);
+        allStateTexts.push(
+          `${def.characterName}.${stateDef.name} = ${stateValue}（min=${globalMin} max=${globalMax}）`,
+        );
       } else {
         allStateTexts.push(`${def.characterName}.${stateDef.name} = ${stateValue}`);
       }
@@ -353,14 +537,14 @@ export function getAllCharactersStates(): Record<string, Record<string, number>>
 /**
  * 从所有 assistant 消息的 <character_states_init> 标签中提取所有角色的状态初始值
  * 这是本次新增功能的自定义初始化值内容，只解析标签内的 _.set 语句
- * 
+ *
  * 统一逻辑：以 0 为基准，使用差值 delta = newValue - oldValue 作为初始值
  * 这样与状态更新逻辑保持一致（都是基于差值）
- * 
+ *
  * 示例：
  * - _.set("角色.状态", 0, 50) → delta = 50，初始值 = 50
  * - _.set("角色.状态", 10, 50) → delta = 40，初始值 = 40
- * 
+ *
  * @param chat 消息数组
  * @returns 按角色分组的初始值映射，key 为角色名称，value 为该角色的状态初始值映射
  */
@@ -421,7 +605,9 @@ export function getAllInitialValuesFromInitTag(
             stateName: update.stateName,
             delta: update.delta,
           });
-          devLog(`收集初始值: ${update.characterName}.${update.stateName} = ${update.delta} (delta = ${update.newValue} - ${update.oldValue})`);
+          devLog(
+            `收集初始值: ${update.characterName}.${update.stateName} = ${update.delta} (delta = ${update.newValue} - ${update.oldValue})`,
+          );
         } else {
           devLog(`跳过已存在的状态: ${update.characterName}.${update.stateName}`);
         }
