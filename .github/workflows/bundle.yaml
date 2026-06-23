@@ -48,6 +48,7 @@ jobs:
         run: |
           rm -rf dist/角色卡示例 dist/脚本示例 dist/流式楼层界面示例 dist/前端界面示例
       - name: Create bundle pull request
+        id: bundle_pr
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.BUNDLE_PR_TOKEN || secrets.GITHUB_TOKEN }}
@@ -58,3 +59,9 @@ jobs:
           delete-branch: true
           add-paths: |
             dist/**
+
+      - name: Enable auto-merge for bundle pull request
+        if: steps.bundle_pr.outputs.pull-request-number != ''
+        run: gh pr merge ${{ steps.bundle_pr.outputs.pull-request-number }} --auto --squash
+        env:
+          GH_TOKEN: ${{ secrets.BUNDLE_PR_TOKEN || secrets.GITHUB_TOKEN }}
