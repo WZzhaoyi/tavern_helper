@@ -2,11 +2,19 @@ import YAML from 'yaml';
 
 const VARIABLE_TYPE = 'chat' as const;
 const STATE_PATH_PREFIX = 'character_states';
+const SUMMARIZE_MEMORY_SOURCE = 'sillytavern.memory' as const;
+const SUMMARIZE_EXTENSION_PROMPT_ID = '1_memory';
+const SUMMARIZE_DEFAULT_TEMPLATE = '[Summary: {{summary}}]';
 export const CHARACTER_STATES_SNAPSHOT_KIND = 'tavern_helper.character_states.snapshot';
 export const CHARACTER_STATES_SNAPSHOT_VERSION = 1;
 
 export type CharacterStatesData = Record<string, Record<string, number>>;
 export type CharacterStatesImportMode = 'merge' | 'replace';
+export type SummarizeMemorySnapshot = {
+  source: typeof SUMMARIZE_MEMORY_SOURCE;
+  message_id?: number;
+  content: string;
+};
 export type CharacterStatesSnapshot = {
   kind: typeof CHARACTER_STATES_SNAPSHOT_KIND;
   version: typeof CHARACTER_STATES_SNAPSHOT_VERSION;
@@ -18,6 +26,7 @@ export type CharacterStatesSnapshot = {
     version?: string;
   };
   states: CharacterStatesData;
+  summarize?: SummarizeMemorySnapshot;
 };
 
 const SafeStateKeySchema = z
@@ -27,6 +36,11 @@ const SafeStateKeySchema = z
     message: '状态快照中包含不安全的键名',
   });
 const CharacterStatesDataSchema = z.record(SafeStateKeySchema, z.record(SafeStateKeySchema, z.number().finite()));
+const SummarizeMemorySnapshotSchema = z.object({
+  source: z.literal(SUMMARIZE_MEMORY_SOURCE),
+  message_id: z.number().int().nonnegative().optional(),
+  content: z.string().min(1),
+});
 const CharacterStatesSnapshotV1Schema = z
   .object({
     kind: z.literal(CHARACTER_STATES_SNAPSHOT_KIND),
@@ -41,6 +55,7 @@ const CharacterStatesSnapshotV1Schema = z
       })
       .optional(),
     states: CharacterStatesDataSchema,
+    summarize: SummarizeMemorySnapshotSchema.optional(),
   })
   .passthrough();
 
@@ -89,8 +104,36 @@ export function countCharacterStates(states: CharacterStatesData): number {
   return Object.values(states).reduce((count, characterStates) => count + Object.keys(characterStates).length, 0);
 }
 
-export function createCharacterStatesSnapshot(): CharacterStatesSnapshot {
+export type CreateCharacterStatesSnapshotOptions = {
+  includeSummarize?: boolean;
+};
+
+export function getLatestSummarizeMemorySnapshot(): SummarizeMemorySnapshot | undefined {
+  try {
+    const messages = getChatMessages('0-{{lastMessageId}}');
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index];
+      const content = message.extra?.memory;
+      if (typeof content === 'string' && content.trim()) {
+        return {
+          source: SUMMARIZE_MEMORY_SOURCE,
+          message_id: message.message_id,
+          content,
+        };
+      }
+    }
+  } catch (error) {
+    devWarn('读取 Summarize 摘要失败:', error);
+  }
+
+  return undefined;
+}
+
+export function createCharacterStatesSnapshot({
+  includeSummarize = true,
+}: CreateCharacterStatesSnapshotOptions = {}): CharacterStatesSnapshot {
   const context = getCurrentSnapshotContext();
+  const summarize = includeSummarize ? getLatestSummarizeMemorySnapshot() : undefined;
 
   return {
     kind: CHARACTER_STATES_SNAPSHOT_KIND,
@@ -102,6 +145,7 @@ export function createCharacterStatesSnapshot(): CharacterStatesSnapshot {
       name: '角色状态管理',
     },
     states: getAllCharactersStates(),
+    ...(summarize ? { summarize } : {}),
   };
 }
 
@@ -161,31 +205,105 @@ export function getCharacterStatesSnapshotImportWarnings(snapshot: CharacterStat
   return warnings;
 }
 
-export function importCharacterStatesSnapshot(
+function formatSummarizeMemoryPrompt(content: string): string {
+  const template = SillyTavern.extensionSettings?.memory?.template;
+  const templateText =
+    typeof template === 'string' && template.includes('{{summary}}') ? template : SUMMARIZE_DEFAULT_TEMPLATE;
+  return templateText.replace(/{{summary}}/g, content);
+}
+
+function refreshActiveSummarizeMemoryPrompt(content: string): void {
+  const prompt = SillyTavern.extensionPrompts?.[SUMMARIZE_EXTENSION_PROMPT_ID];
+  if (!prompt) {
+    return;
+  }
+
+  SillyTavern.setExtensionPrompt(
+    SUMMARIZE_EXTENSION_PROMPT_ID,
+    formatSummarizeMemoryPrompt(content),
+    prompt.position === -1 ? -1 : 1,
+    prompt.depth,
+    prompt.scan,
+    prompt.role,
+    prompt.filter,
+  ).catch(error => devWarn('刷新 Summarize 摘要注入失败:', error));
+}
+
+async function importSummarizeMemorySnapshot(snapshot: SummarizeMemorySnapshot): Promise<number> {
+  const messages = getChatMessages('0-{{lastMessageId}}');
+  if (messages.length === 0) {
+    throw new Error('当前聊天没有可写入 Summarize 摘要的楼层');
+  }
+
+  // SillyTavern 内置 Summarize 会默认把摘要保存到倒数第二楼；只有一楼时保存到第 0 楼。
+  const targetMessage = messages[Math.max(0, messages.length - 2)];
+  await setChatMessages(
+    [
+      {
+        message_id: targetMessage.message_id,
+        extra: {
+          ...targetMessage.extra,
+          memory: snapshot.content,
+        },
+      },
+    ],
+    { refresh: 'none' },
+  );
+  refreshActiveSummarizeMemoryPrompt(snapshot.content);
+  return targetMessage.message_id;
+}
+
+export async function importCharacterStatesSnapshot(
   rawSnapshot: unknown,
   mode: CharacterStatesImportMode,
-): { snapshot: CharacterStatesSnapshot; characterCount: number; stateCount: number } {
+  { includeSummarize = true }: { includeSummarize?: boolean } = {},
+): Promise<{
+  snapshot: CharacterStatesSnapshot;
+  characterCount: number;
+  stateCount: number;
+  summarizeImported: boolean;
+  summarizeImportError?: string;
+  summarizeMessageId?: number;
+}> {
   const snapshot = normalizeCharacterStatesSnapshot(rawSnapshot);
+  const stateCount = countCharacterStates(snapshot.states);
+  const shouldImportStates = stateCount > 0 || !snapshot.summarize;
 
-  updateVariablesWith(
-    variables => {
-      if (mode === 'replace') {
-        _.set(variables, STATE_PATH_PREFIX, snapshot.states);
+  if (shouldImportStates) {
+    updateVariablesWith(
+      variables => {
+        if (mode === 'replace') {
+          _.set(variables, STATE_PATH_PREFIX, snapshot.states);
+          return variables;
+        }
+
+        const currentStatesParseResult = CharacterStatesDataSchema.safeParse(_.get(variables, STATE_PATH_PREFIX, {}));
+        const currentStates = currentStatesParseResult.success ? currentStatesParseResult.data : {};
+        _.set(variables, STATE_PATH_PREFIX, _.merge({}, currentStates, snapshot.states));
         return variables;
-      }
+      },
+      { type: VARIABLE_TYPE },
+    );
+  }
 
-      const currentStatesParseResult = CharacterStatesDataSchema.safeParse(_.get(variables, STATE_PATH_PREFIX, {}));
-      const currentStates = currentStatesParseResult.success ? currentStatesParseResult.data : {};
-      _.set(variables, STATE_PATH_PREFIX, _.merge({}, currentStates, snapshot.states));
-      return variables;
-    },
-    { type: VARIABLE_TYPE },
-  );
+  let summarizeMessageId: number | undefined;
+  let summarizeImportError: string | undefined;
+  if (includeSummarize && snapshot.summarize) {
+    try {
+      summarizeMessageId = await importSummarizeMemorySnapshot(snapshot.summarize);
+    } catch (error) {
+      summarizeImportError = error instanceof Error ? error.message : String(error);
+      devWarn('导入 Summarize 摘要失败:', error);
+    }
+  }
 
   return {
     snapshot,
     characterCount: Object.keys(snapshot.states).length,
-    stateCount: countCharacterStates(snapshot.states),
+    stateCount,
+    summarizeImported: summarizeMessageId !== undefined,
+    summarizeImportError,
+    summarizeMessageId,
   };
 }
 
