@@ -25,6 +25,8 @@ export const Settings = z
     inject_current_state_at_end: z.boolean().default(true),
     // 是否使用 YAML 格式解析 <character_states> 标签内容
     use_yaml: z.boolean().default(false),
+    // 导入导出状态快照时是否包含 Summarize 摘要
+    include_summarize_in_snapshot: z.boolean().default(true),
     // 开发模式：是否打印详细日志
     dev_mode: z.boolean().default(false),
   })

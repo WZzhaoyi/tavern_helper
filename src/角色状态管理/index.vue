@@ -22,6 +22,11 @@
         </div>
 
         <div class="flex-container">
+          <input v-model="settings.include_summarize_in_snapshot" type="checkbox" />
+          <label>导入导出包含 Summarize 摘要</label>
+        </div>
+
+        <div class="flex-container">
           <input v-model="settings.dev_mode" type="checkbox" />
           <label>开发模式（显示详细日志）</label>
         </div>
@@ -106,7 +111,8 @@
             <br />
             <strong>导入导出：</strong>导出的是当前聊天变量中的
             <code>character_states</code>
-            数值快照，不包含状态区间定义；导入仅会合并或覆盖该路径，不会修改当前聊天中的其他变量。
+            数值快照，以及当前聊天已存在的 Summarize
+            摘要；不包含状态区间定义。导入会合并或覆盖该路径，并在快照包含摘要且开关启用时写回 Summarize 摘要。
             <br />
             <br />
             <br />
@@ -192,16 +198,22 @@ function downloadTextFile(filename: string, content: string): void {
 }
 
 function exportStates(): void {
-  const snapshot = createCharacterStatesSnapshot();
+  const includeSummarize = settings.value.include_summarize_in_snapshot;
+  const snapshot = createCharacterStatesSnapshot({ includeSummarize });
   const stateCount = countCharacterStates(snapshot.states);
+  const hasSummarize = Boolean(snapshot.summarize?.content);
 
-  if (stateCount === 0) {
-    toastr.info('暂无角色状态数据可导出', '状态导出');
+  if (stateCount === 0 && (!includeSummarize || !hasSummarize)) {
+    toastr.info('暂无角色状态数据或 Summarize 摘要可导出', '状态导出');
     return;
   }
 
   downloadTextFile(createSnapshotFilename(snapshot), serializeCharacterStatesSnapshot(snapshot));
-  toastr.success(`已导出 ${Object.keys(snapshot.states).length} 个角色、${stateCount} 个状态`, '状态导出');
+  const summarizeText = hasSummarize ? '，并包含 Summarize 摘要' : '';
+  toastr.success(
+    `已导出 ${Object.keys(snapshot.states).length} 个角色、${stateCount} 个状态${summarizeText}`,
+    '状态导出',
+  );
 }
 
 function selectImportFile(mode: CharacterStatesImportMode): void {
@@ -219,6 +231,9 @@ async function importStates(event: Event): Promise<void> {
     const rawSnapshot = JSON.parse(await file.text());
     const snapshot = normalizeCharacterStatesSnapshot(rawSnapshot);
     const warnings = getCharacterStatesSnapshotImportWarnings(snapshot);
+    const snapshotStateCount = countCharacterStates(snapshot.states);
+    const includeSummarize = settings.value.include_summarize_in_snapshot;
+    const willImportStates = snapshotStateCount > 0 || !snapshot.summarize;
 
     if (warnings.length > 0 && !confirm(`${warnings.join('\n')}\n\n仍要导入吗？`)) {
       return;
@@ -226,14 +241,27 @@ async function importStates(event: Event): Promise<void> {
 
     if (
       pendingImportMode.value === 'replace' &&
+      willImportStates &&
       !confirm('导入并覆盖会替换当前聊天的全部 character_states，确定继续吗？')
     ) {
       return;
     }
 
-    const result = importCharacterStatesSnapshot(snapshot, pendingImportMode.value);
+    const result = await importCharacterStatesSnapshot(snapshot, pendingImportMode.value, { includeSummarize });
     const modeText = pendingImportMode.value === 'replace' ? '覆盖' : '合并';
-    toastr.success(`已${modeText}导入 ${result.characterCount} 个角色、${result.stateCount} 个状态`, '状态导入');
+    const summarizeText = result.summarizeImported
+      ? '，并写入 Summarize 摘要'
+      : snapshot.summarize && !includeSummarize
+        ? '，已跳过 Summarize 摘要'
+        : result.summarizeImportError
+          ? '，但 Summarize 摘要写入失败'
+          : '';
+    const successMessage = `已${modeText}导入 ${result.characterCount} 个角色、${result.stateCount} 个状态${summarizeText}`;
+    if (result.summarizeImportError) {
+      toastr.warning(successMessage, '状态导入');
+    } else {
+      toastr.success(successMessage, '状态导入');
+    }
   } catch (error) {
     console.error('导入角色状态失败:', error);
     const message = error instanceof Error ? error.message : String(error);
