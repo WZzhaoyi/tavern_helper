@@ -120,7 +120,13 @@ $(() => {
     let nextStates = baseStates;
 
     updates.forEach(update => {
-      nextStates = applyStateUpdateToStates(nextStates, update.characterName, update.stateName, update.delta);
+      nextStates = applyStateUpdateToStates(
+        nextStates,
+        update.characterName,
+        update.stateName,
+        update.oldValue,
+        update.newValue,
+      );
     });
 
     await withSnapshotWrite(() => writeMessageStateSnapshot(message_id, nextStates));
@@ -216,7 +222,7 @@ $(() => {
       const message = event_data.chat[i];
       if (!message.content) continue;
 
-      let contentText = getSendingMessageText(message);
+      const contentText = getSendingMessageText(message);
       if (!contentText) continue;
 
       const CHARACTER_STATES_TAG = /<character_states>/i;
