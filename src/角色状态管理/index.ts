@@ -27,6 +27,7 @@ import {
   parseStateUpdates,
   replaceCharacterStatesTagsInText,
   setDevModeGetter,
+  stripStateUpdateCommandsFromText,
   syncChatVariablesFromLatestSnapshot,
   syncChatVariablesFromStates,
   writeMessageStateSnapshot,
@@ -71,6 +72,41 @@ $(() => {
         return '';
       })
       .join('\n');
+  }
+
+  function setSendingMessageText(message: SillyTavern.SendingMessage, text: string): void {
+    if (typeof message.content === 'string') {
+      message.content = text;
+      return;
+    }
+
+    const newContent = [...message.content];
+    if (newContent.length > 0 && typeof newContent[0] === 'object' && newContent[0].type === 'text') {
+      newContent[0] = { ...newContent[0], text };
+    } else {
+      newContent[0] = { type: 'text', text };
+    }
+    message.content = newContent as any;
+  }
+
+  function stripStateUpdateCommandsFromPrompt(chat: SillyTavern.SendingMessage[]): void {
+    let strippedCount = 0;
+    for (const message of chat) {
+      if (message.role !== 'assistant' || !message.content) continue;
+
+      const contentText = getSendingMessageText(message);
+      if (!contentText) continue;
+
+      const strippedText = stripStateUpdateCommandsFromText(contentText);
+      if (strippedText !== contentText) {
+        setSendingMessageText(message, strippedText);
+        strippedCount++;
+      }
+    }
+
+    if (strippedCount > 0) {
+      devLog(`已在发送前剥离 ${strippedCount} 条 assistant 消息中的状态更新命令`);
+    }
   }
 
   function buildInitialStatesBefore(message_id: number): CharacterStatesData {
@@ -214,6 +250,7 @@ $(() => {
     }
 
     const allDefinitions = parseAllStateDefinitionsFromPrompt(promptText, settingsStore.settings.use_yaml);
+    stripStateUpdateCommandsFromPrompt(event_data.chat);
     if (allDefinitions.length === 0) {
       return;
     }
@@ -232,17 +269,7 @@ $(() => {
 
       const replacedContent = replaceCharacterStatesTagsInText(contentText, allDefinitions, currentStates);
       if (replacedContent !== contentText) {
-        if (typeof message.content === 'string') {
-          event_data.chat[i].content = replacedContent;
-        } else {
-          const newContent = [...message.content];
-          if (newContent.length > 0 && typeof newContent[0] === 'object' && newContent[0].type === 'text') {
-            newContent[0] = { ...newContent[0], text: replacedContent };
-          } else {
-            newContent[0] = { type: 'text', text: replacedContent };
-          }
-          event_data.chat[i].content = newContent as any;
-        }
+        setSendingMessageText(message, replacedContent);
         devLog(`已替换消息 ${i} 中的 <character_states> 标签`);
       }
     }

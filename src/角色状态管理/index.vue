@@ -133,6 +133,8 @@
             <br />
             - 只有 <code>&lt;character_states_init&gt;</code> 标签内的
             <code>_.set</code> 用于初始化，其他位置作为状态更新处理
+            <br />
+            - 发送给 LLM 前会临时剥离 assistant 历史消息中包含 <code>_.set</code> 更新命令的整行，聊天原文不变
           </small>
         </div>
       </div>

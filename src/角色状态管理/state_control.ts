@@ -5,6 +5,8 @@ const STATE_PATH_PREFIX = 'character_states';
 const SUMMARIZE_MEMORY_SOURCE = 'sillytavern.memory' as const;
 const SUMMARIZE_EXTENSION_PROMPT_ID = '1_memory';
 const SUMMARIZE_DEFAULT_TEMPLATE = '[Summary: {{summary}}]';
+const STATE_UPDATE_VALUE_PATTERN = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|-?\d+(?:\.\d+)?)`;
+const STATE_UPDATE_PATTERN_TEXT = String.raw`_\.set\s*\(\s*(["'])([^"']+)\.([^"']+)\1\s*,\s*(${STATE_UPDATE_VALUE_PATTERN})\s*,\s*(${STATE_UPDATE_VALUE_PATTERN})\s*\)`;
 export const CHARACTER_STATES_SNAPSHOT_KIND = 'tavern_helper.character_states.snapshot';
 export const CHARACTER_STATES_SNAPSHOT_VERSION = 1;
 
@@ -509,10 +511,8 @@ export function parseStateUpdates(text: string): Array<{
     oldValue: CharacterStateValue;
     newValue: CharacterStateValue;
   }> = [];
-  const valuePattern = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|-?\d+(?:\.\d+)?)`;
-  const setPatternText = String.raw`_\.set\s*\(\s*(["'])([^"']+)\.([^"']+)\1\s*,\s*(${valuePattern})\s*,\s*(${valuePattern})\s*\)`;
-  const pattern = new RegExp(setPatternText, 'gi');
-  const fullPattern = new RegExp(`^${setPatternText}`, 'i');
+  const pattern = new RegExp(STATE_UPDATE_PATTERN_TEXT, 'gi');
+  const fullPattern = new RegExp(`^${STATE_UPDATE_PATTERN_TEXT}`, 'i');
   let match;
 
   while ((match = pattern.exec(text)) !== null) {
@@ -553,6 +553,15 @@ export function parseStateUpdates(text: string): Array<{
   }
 
   return updates;
+}
+
+export function stripStateUpdateCommandsFromText(text: string): string {
+  const stateUpdatePattern = new RegExp(STATE_UPDATE_PATTERN_TEXT, 'i');
+  return text
+    .split('\n')
+    .filter(line => !stateUpdatePattern.test(line))
+    .join('\n')
+    .trimEnd();
 }
 
 export function applyStateUpdateToStates(

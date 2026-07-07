@@ -229,6 +229,7 @@ AI：我愿意再听你说一会儿。_.set("角色名.关系阶段","stranger",
    - 旧聊天若只有聊天变量而没有楼层快照，会惰性迁移到当前分支末端 assistant 楼层作为锚点
    - 数值状态使用差值（delta）更新，避免 oldValue 不准确导致的问题
    - 离散状态直接写入 newValue，用于阶段、标签、布尔开关等跳转
+   - 发送给 LLM 前会临时剥离 assistant 历史消息中包含 `_.set()` 更新命令的整行，避免历史更新语句污染上下文；聊天原文不会被改写
 
 4. **当前 content 替换**：
    - 在 `CHAT_COMPLETION_PROMPT_READY` 事件中，把定义用 `<character_states>` 标签原地替换为 `<character_states type="content">`，其中只包含当前匹配分支的 content（不暴露其他分支）
