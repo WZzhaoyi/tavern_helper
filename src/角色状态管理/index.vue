@@ -96,8 +96,8 @@
             <br />
             <br />
             <strong>状态初始化：</strong>在任意 assistant 消息中使用
-            <code>&lt;character_states_init&gt;</code> 标签定义初始值。只要标签中存在某个角色的
-            <code>_.set</code> 条目，就会自动初始化该角色。
+            <code>&lt;character_states_init&gt;</code> 标签定义初始值。只有尚不存在的状态会被写入快照；缺失状态参与匹配时按
+            0 处理。
             <br />
             <code
               >&lt;character_states_init&gt;&lt;br /&gt;_.set(&quot;角色名.状态名&quot;, 0, 50);&lt;br
@@ -109,22 +109,16 @@
             <br />
             <strong>变量路径：</strong><code>character_states.角色名.状态名</code>
             <br />
-            <strong>导入导出：</strong>导出的是当前聊天变量中的
+            <strong>导入导出：</strong>导出的是当前分支最新楼层快照中的
             <code>character_states</code>
             数值快照，以及当前聊天已存在的 Summarize
-            摘要；不包含状态区间定义。导入会合并或覆盖该路径，并在快照包含摘要且开关启用时写回 Summarize 摘要。
+            摘要；不包含状态区间定义。导入会合并或覆盖当前分支末端 assistant 楼层快照，并在快照包含摘要且开关启用时写回 Summarize 摘要。
             <br />
             <br />
             <br />
             <strong>说明：</strong>
             <br />
             - 启用 YAML 后，请确保 &lt;character_states&gt; 内为 YAML 格式
-            <br />
-            - 初始化使用差值逻辑：初始值 = newValue - oldValue（与状态更新保持一致）
-            <br />
-            - <code>&lt;character_states&gt;</code> 标签会在发送前被替换为当前匹配区间的 content
-            <br />
-            - 当前状态值与边界通过&quot;在聊天末尾注入当前状态信息&quot;开关，作为 system 消息追加到聊天末端
             <br />
             - 只有 <code>&lt;character_states_init&gt;</code> 标签内的
             <code>_.set</code> 用于初始化，其他位置作为状态更新处理
