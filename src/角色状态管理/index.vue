@@ -70,39 +70,27 @@
 
         <div class="flex-container">
           <small>
-            <strong>状态定义：</strong>从 prompt 中的 <code>&lt;character_states&gt;</code> 标签自动解析。
+            <strong>状态定义：</strong>在 prompt 中加入 <code>&lt;character_states&gt;</code> 标签。
             <br />
-            <strong>JSON 格式（默认）：</strong>
+            <strong>JSON 示例：</strong>
             <br />
             <code
               >&lt;character_states&gt;{ &quot;name&quot;: &quot;character_states&quot;, &quot;characters&quot;: [{
               &quot;name&quot;: &quot;角色名&quot;, &quot;states&quot;: [{ &quot;name&quot;: &quot;状态名&quot;,
               &quot;ranges&quot;: [{ &quot;min&quot;: 0, &quot;max&quot;: 30, &quot;content&quot;: &quot;内容&quot;,
-              &quot;instruction&quot;: &quot;当前分支更新指南&quot; }, { &quot;value&quot;: &quot;阶段名&quot;,
-              &quot;content&quot;: &quot;离散阶段内容&quot; }]
+              &quot;instruction&quot;: &quot;更新指南&quot; }, { &quot;value&quot;: &quot;阶段名&quot;,
+              &quot;content&quot;: &quot;阶段内容&quot;, &quot;instruction&quot;: &quot;更新指南&quot; }]
               }] }] }&lt;/character_states&gt;</code
             >
             <br />
             <br />
-            <strong>YAML 格式（需开启 YAML 开关）：</strong>
+            <strong>分支规则：</strong><code>min/max</code> 用于数值区间，<code>value</code> 用于阶段值；当前匹配分支的
+            <code>content</code> 会提供给 LLM，<code>instruction</code> 用作该分支的更新指南。
             <br />
-            <code>
-              &lt;character_states&gt; name: character_states characters: &nbsp;&nbsp;- name: 角色名
-              &nbsp;&nbsp;&nbsp;&nbsp;states: &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- name: 状态名
-              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ranges:
-              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- min: 0
-              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;max: 30
-              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;content: "内容"
-              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instruction: "当前分支更新指南"
-              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;- value: "阶段名"
-              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;content: "离散阶段内容"
-              &lt;/character_states&gt;
-            </code>
-            <br />
+            开启 YAML 后，可在 <code>&lt;character_states&gt;</code> 内使用等价 YAML。
             <br />
             <strong>状态初始化：</strong>在任意 assistant 消息中使用
-            <code>&lt;character_states_init&gt;</code> 标签定义初始值。只有尚不存在的状态会被写入快照；缺失状态参与匹配时按
-            0 处理。
+            <code>&lt;character_states_init&gt;</code> 标签定义初始值。
             <br />
             <code
               >&lt;character_states_init&gt;&lt;br /&gt;_.set(&quot;角色名.状态名&quot;, 0, 50);&lt;br
@@ -110,31 +98,12 @@
             >
             <br />
             <br />
-            <strong>状态更新：</strong><code>_.set(&quot;角色名.状态名&quot;, oldvalue, newvalue)</code>
-            ，数值状态按差值更新，字符串/布尔等离散状态直接写入 newvalue。
+            <strong>状态更新：</strong>让 LLM 在回复末尾追加
+            <code>_.set(&quot;角色名.状态名&quot;, 旧值, 新值)</code>，每条更新命令单独成行。
             <br />
             <strong>变量路径：</strong><code>character_states.角色名.状态名</code>
             <br />
-            <strong>导入导出：</strong>导出的是当前分支最新楼层快照中的
-            <code>character_states</code>
-            数值快照，以及当前聊天已存在的 Summarize
-            摘要；不包含状态分支定义。导入会合并或覆盖当前分支末端 assistant 楼层快照，并在快照包含摘要且开关启用时写回 Summarize 摘要。
-            <br />
-            <br />
-            <br />
-            <strong>说明：</strong>
-            <br />
-            - 启用 YAML 后，请确保 &lt;character_states&gt; 内为 YAML 格式
-            <br />
-            - 分支可用 <code>min/max</code> 匹配连续数值，也可用 <code>value</code> 匹配离散值；当前分支的
-            <code>instruction</code> 会作为 <code>&lt;character_states type="current"&gt;</code> 中对应
-            <code>&lt;instruction&gt;</code> 的正文附在聊天尾部；没有指南时使用自闭合
-            <code>&lt;instruction /&gt;</code> 仅提供当前值
-            <br />
-            - 只有 <code>&lt;character_states_init&gt;</code> 标签内的
-            <code>_.set</code> 用于初始化，其他位置作为状态更新处理
-            <br />
-            - 发送给 LLM 前会临时剥离 assistant 历史消息中包含 <code>_.set</code> 更新命令的整行，聊天原文不变
+            <strong>导入导出：</strong>用于迁移当前聊天的角色状态和 Summarize 摘要，不包含状态定义。
           </small>
         </div>
       </div>

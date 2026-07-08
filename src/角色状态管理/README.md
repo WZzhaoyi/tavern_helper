@@ -243,6 +243,10 @@ AI：我愿意再听你说一会儿。_.set("角色名.关系阶段","stranger",
 
 ```xml
 <character_states type="current">
+<update_format>
+状态变化时，在回复末尾追加更新命令；每条命令必须单独成行。
+格式：_.set("角色名.状态名", 旧值, 新值)
+</update_format>
 <instruction name="角色.状态名1" value="值1" min="..." max="...">
 当前分支 instruction
 </instruction>
@@ -250,7 +254,7 @@ AI：我愿意再听你说一会儿。_.set("角色名.关系阶段","stranger",
 </character_states>
 ```
 
-没有 `instruction` 的状态使用自闭合 `<instruction />`，只提供当前值。
+`<update_format>` 说明 LLM 应输出的 `_.set()` 更新格式；没有 `instruction` 的状态使用自闭合 `<instruction />`，只提供当前值。
 
 6. **变量替换**：
    - 在世界书或其他地方使用 `{{character_states.角色名.状态名}}` 格式的变量

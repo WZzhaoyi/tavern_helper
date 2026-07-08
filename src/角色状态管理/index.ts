@@ -109,7 +109,17 @@ $(() => {
     }
   }
 
-  function buildInitialStatesBefore(message_id: number): CharacterStatesData {
+  function mergeStates(...sources: CharacterStatesData[]): CharacterStatesData {
+    const merged: CharacterStatesData = {};
+    for (const source of sources) {
+      for (const [characterName, states] of Object.entries(source)) {
+        merged[characterName] = { ...(merged[characterName] ?? {}), ...states };
+      }
+    }
+    return merged;
+  }
+
+  function buildInitialStatesBefore(message_id: number, seedStates: CharacterStatesData = {}): CharacterStatesData {
     const messages = getChatMessages('0-{{lastMessageId}}')
       .filter(message => message.message_id < message_id)
       .map(
@@ -118,7 +128,7 @@ $(() => {
           content: message.message,
         }),
       );
-    const initialValues = getAllInitialValuesFromInitTag(messages, {});
+    const initialValues = getAllInitialValuesFromInitTag(messages, seedStates);
     const states: CharacterStatesData = {};
 
     for (const [characterName, characterInitialValues] of Object.entries(initialValues)) {
@@ -128,21 +138,22 @@ $(() => {
     return states;
   }
 
-  function getBaseStatesForMessage(message_id: number): CharacterStatesData {
+  function getBaseStatesForMessage(message_id: number, { useChatVariableSeed = false } = {}): CharacterStatesData {
     const baseSnapshot = findLatestStateSnapshotBefore(message_id);
     if (baseSnapshot) {
       return baseSnapshot.states;
     }
 
-    const initialStates = buildInitialStatesBefore(message_id);
-    if (Object.keys(initialStates).length > 0) {
-      return initialStates;
-    }
+    const seedStates = useChatVariableSeed ? getChatVariablesCharacterStatesData() : {};
+    const initialStates = buildInitialStatesBefore(message_id, seedStates);
 
-    return {};
+    return mergeStates(seedStates, initialStates);
   }
 
-  async function rebuildMessageSnapshot(message_id: number, { log = true } = {}): Promise<boolean> {
+  async function rebuildMessageSnapshot(
+    message_id: number,
+    { log = true, useChatVariableSeed = false } = {},
+  ): Promise<boolean> {
     if (!settingsStore.settings.enabled || message_id === 0) return false;
 
     const message = getChatMessages(message_id)[0];
@@ -151,7 +162,7 @@ $(() => {
     const messageText = message.message || '';
     if (!messageText) return false;
 
-    const baseStates = getBaseStatesForMessage(message_id);
+    const baseStates = getBaseStatesForMessage(message_id, { useChatVariableSeed });
     const updates = parseStateUpdates(messageText);
     let nextStates = baseStates;
 
@@ -246,6 +257,8 @@ $(() => {
       if (snapshotMessageId !== undefined) {
         const initializedStates = currentStates;
         enqueueRebuild(() => writeSnapshotAndBackup(snapshotMessageId, initializedStates));
+      } else {
+        syncChatVariablesFromStates(currentStates);
       }
     }
 
@@ -288,8 +301,9 @@ $(() => {
 
   eventOn(tavern_events.MESSAGE_RECEIVED, (message_id: number) => {
     enqueueRebuild(async () => {
+      const isFirstAssistantMessage = getLatestAssistantMessage(message_id) === undefined;
       await migrateLegacySnapshotIfNeeded(message_id);
-      await rebuildMessageSnapshot(message_id);
+      await rebuildMessageSnapshot(message_id, { useChatVariableSeed: isFirstAssistantMessage });
     });
   });
 

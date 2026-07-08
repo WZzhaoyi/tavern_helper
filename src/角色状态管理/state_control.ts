@@ -5,6 +5,8 @@ const STATE_PATH_PREFIX = 'character_states';
 const SUMMARIZE_MEMORY_SOURCE = 'sillytavern.memory' as const;
 const SUMMARIZE_EXTENSION_PROMPT_ID = '1_memory';
 const SUMMARIZE_DEFAULT_TEMPLATE = '[Summary: {{summary}}]';
+const STATE_UPDATE_FORMAT_TEXT =
+  '状态变化时，在回复末尾追加更新命令；每条命令必须单独成行。\n格式：_.set("角色名.状态名", 旧值, 新值)';
 const STATE_UPDATE_VALUE_PATTERN = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|-?\d+(?:\.\d+)?)`;
 const STATE_UPDATE_PATTERN_TEXT = String.raw`_\.set\s*\(\s*(["'])([^"']+)\.([^"']+)\1\s*,\s*(${STATE_UPDATE_VALUE_PATTERN})\s*,\s*(${STATE_UPDATE_VALUE_PATTERN})\s*\)`;
 export const CHARACTER_STATES_SNAPSHOT_KIND = 'tavern_helper.character_states.snapshot';
@@ -423,7 +425,10 @@ export async function importCharacterStatesSnapshot(
       mode === 'replace' ? cloneCharacterStates(snapshot.states) : _.merge({}, currentStates, snapshot.states);
 
     const latestMessage = getLatestAssistantMessage();
-    if (latestMessage) {
+    if (!latestMessage) {
+      syncChatVariablesFromStates(importedStates);
+      devLog('当前聊天尚无 assistant 消息，已将导入状态暂存到聊天变量，后续 assistant 楼层会写入快照');
+    } else {
       await writeMessageStateSnapshot(latestMessage.message_id, importedStates);
       syncChatVariablesFromStates(importedStates);
     }
@@ -750,7 +755,7 @@ export function replaceCharacterStatesTagsInText(
 }
 
 /**
- * 构造当前角色状态 XML 块（值 + 边界 + 当前分支指南），用于在聊天末端追加为一条 system 消息。
+ * 构造当前角色状态 XML 块（更新格式 + 值 + 边界 + 当前分支指南），用于在聊天末端追加为一条 system 消息。
  * content 已由 replaceCharacterStatesTagsInText 在前缀输出，此处不重复。
  */
 export function buildCurrentStatesText(
@@ -798,7 +803,9 @@ export function buildCurrentStatesText(
   if (stateEntries.length === 0) {
     return null;
   }
-  return `<character_states type="current">\n${stateEntries.join('\n')}\n</character_states>`;
+
+  const updateFormatEntry = `<update_format>\n${escapeXmlText(STATE_UPDATE_FORMAT_TEXT)}\n</update_format>`;
+  return `<character_states type="current">\n${[updateFormatEntry, ...stateEntries].join('\n')}\n</character_states>`;
 }
 
 export function getAllStatesDisplay(
