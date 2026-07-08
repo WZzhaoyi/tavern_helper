@@ -1,20 +1,22 @@
 import { klona } from 'klona';
 
 /**
- * 状态范围定义：不同数值区间对应不同的content
+ * 状态分支定义：可按连续数值区间或离散值匹配
  */
 export const StateRange = z.object({
-  min: z.number(), // 最小值（包含）
-  max: z.number(), // 最大值（包含）
-  content: z.string(), // 该区间对应的内容
+  min: z.number().optional(), // 最小值（包含）
+  max: z.number().optional(), // 最大值（包含）
+  value: z.union([z.string(), z.number(), z.boolean()]).optional(), // 离散值
+  content: z.string(), // 该分支对应的内容
+  instruction: z.string().optional(), // 当前分支对应的更新指南
 });
 
 /**
- * 状态定义：每个状态可以有多个数值区间
+ * 状态定义：每个状态可以有多个连续或离散分支
  */
 export const StateDefinition = z.object({
   name: z.string(), // 状态名称
-  ranges: z.array(StateRange), // 不同数值区间对应的content
+  ranges: z.array(StateRange), // 不同状态分支对应的 content
 });
 
 export const Settings = z

@@ -5,11 +5,31 @@ const STATE_PATH_PREFIX = 'character_states';
 const SUMMARIZE_MEMORY_SOURCE = 'sillytavern.memory' as const;
 const SUMMARIZE_EXTENSION_PROMPT_ID = '1_memory';
 const SUMMARIZE_DEFAULT_TEMPLATE = '[Summary: {{summary}}]';
+const STATE_UPDATE_FORMAT_TEXT =
+  '状态变化时，在回复末尾追加更新命令；每条命令必须单独成行。\n格式：_.set("角色名.状态名", 旧值, 新值)';
+const STATE_UPDATE_VALUE_PATTERN = String.raw`(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|-?\d+(?:\.\d+)?)`;
+const STATE_UPDATE_PATTERN_TEXT = String.raw`_\.set\s*\(\s*(["'])([^"']+)\.([^"']+)\1\s*,\s*(${STATE_UPDATE_VALUE_PATTERN})\s*,\s*(${STATE_UPDATE_VALUE_PATTERN})\s*\)`;
 export const CHARACTER_STATES_SNAPSHOT_KIND = 'tavern_helper.character_states.snapshot';
 export const CHARACTER_STATES_SNAPSHOT_VERSION = 1;
 
-export type CharacterStatesData = Record<string, Record<string, number>>;
+export type CharacterStateValue = string | number | boolean;
+export type CharacterStatesData = Record<string, Record<string, CharacterStateValue>>;
 export type CharacterStatesImportMode = 'merge' | 'replace';
+export type CharacterStatesMessageSnapshot = {
+  message_id: number;
+  states: CharacterStatesData;
+};
+export type StateBranch = {
+  min?: number;
+  max?: number;
+  value?: CharacterStateValue;
+  content: string;
+  instruction?: string;
+};
+export type StateDefinition = {
+  name: string;
+  ranges: StateBranch[];
+};
 export type SummarizeMemorySnapshot = {
   source: typeof SUMMARIZE_MEMORY_SOURCE;
   message_id?: number;
@@ -35,7 +55,8 @@ const SafeStateKeySchema = z
   .refine(key => !['__proto__', 'prototype', 'constructor'].includes(key), {
     message: '状态快照中包含不安全的键名',
   });
-const CharacterStatesDataSchema = z.record(SafeStateKeySchema, z.record(SafeStateKeySchema, z.number().finite()));
+const CharacterStateValueSchema = z.union([z.number().finite(), z.string(), z.boolean()]);
+const CharacterStatesDataSchema = z.record(SafeStateKeySchema, z.record(SafeStateKeySchema, CharacterStateValueSchema));
 const SummarizeMemorySnapshotSchema = z.object({
   source: z.literal(SUMMARIZE_MEMORY_SOURCE),
   message_id: z.number().int().nonnegative().optional(),
@@ -77,8 +98,137 @@ export function devWarn(...args: any[]): void {
   }
 }
 
-function getStatePath(characterName: string, stateName: string): string {
-  return `${STATE_PATH_PREFIX}.${characterName}.${stateName}`;
+function cloneCharacterStates(states: CharacterStatesData): CharacterStatesData {
+  return _.cloneDeep(states);
+}
+
+function normalizeCharacterStatesData(data: unknown): CharacterStatesData {
+  const result = CharacterStatesDataSchema.safeParse(data);
+  return result.success ? result.data : {};
+}
+
+function getMessageById(message_id: number): ChatMessage | undefined {
+  return getChatMessages(message_id)[0];
+}
+
+export function getLatestAssistantMessage(beforeMessageId = Infinity): ChatMessage | undefined {
+  const messages = getChatMessages('0-{{lastMessageId}}');
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role === 'assistant' && message.message_id !== 0 && message.message_id < beforeMessageId) {
+      return message;
+    }
+  }
+  return undefined;
+}
+
+export function getMessageStateSnapshot(message_id: number): CharacterStatesMessageSnapshot | undefined {
+  const message = getMessageById(message_id);
+  if (!message) {
+    return undefined;
+  }
+
+  const states = normalizeCharacterStatesData(_.get(message.data, STATE_PATH_PREFIX));
+  if (countCharacterStates(states) === 0) {
+    return undefined;
+  }
+
+  return {
+    message_id,
+    states,
+  };
+}
+
+export function findLatestStateSnapshotBefore(end_message_id: number): CharacterStatesMessageSnapshot | undefined {
+  const messages = getChatMessages('0-{{lastMessageId}}');
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.message_id >= end_message_id) {
+      continue;
+    }
+
+    const snapshot = getMessageStateSnapshot(message.message_id);
+    if (snapshot) {
+      return {
+        ...snapshot,
+        states: cloneCharacterStates(snapshot.states),
+      };
+    }
+  }
+
+  return undefined;
+}
+
+export function getLatestStateSnapshot(): CharacterStatesMessageSnapshot | undefined {
+  return findLatestStateSnapshotBefore(getLastMessageId() + 1);
+}
+
+export function getLatestCharacterStatesData(): CharacterStatesData {
+  const latestSnapshot = getLatestStateSnapshot();
+  if (latestSnapshot) {
+    return cloneCharacterStates(latestSnapshot.states);
+  }
+
+  // 仅兼容旧聊天：无任何楼层快照时，聊天变量可作为首次迁移种子。
+  return getChatVariablesCharacterStatesData();
+}
+
+export function getChatVariablesCharacterStatesData(): CharacterStatesData {
+  return normalizeCharacterStatesData(_.get(getVariables({ type: VARIABLE_TYPE }), STATE_PATH_PREFIX));
+}
+
+export function syncChatVariablesFromStates(states: CharacterStatesData): void {
+  updateVariablesWith(
+    variables => {
+      _.set(variables, STATE_PATH_PREFIX, cloneCharacterStates(states));
+      return variables;
+    },
+    { type: VARIABLE_TYPE },
+  );
+}
+
+export function syncChatVariablesFromLatestSnapshot(): boolean {
+  const latestSnapshot = getLatestStateSnapshot();
+  if (latestSnapshot) {
+    syncChatVariablesFromStates(latestSnapshot.states);
+    return true;
+  }
+  return false;
+}
+
+export async function writeMessageStateSnapshot(message_id: number, states: CharacterStatesData): Promise<void> {
+  const message = getMessageById(message_id);
+  if (!message) {
+    return;
+  }
+
+  await setChatMessages(
+    [
+      {
+        message_id,
+        data: {
+          ...message.data,
+          [STATE_PATH_PREFIX]: cloneCharacterStates(states),
+        },
+      },
+    ],
+    { refresh: 'none' },
+  );
+}
+
+export async function clearMessageStateSnapshotsFrom(message_id: number): Promise<void> {
+  const messages = getChatMessages('0-{{lastMessageId}}').filter(message => message.message_id >= message_id);
+  if (messages.length === 0) {
+    return;
+  }
+
+  await setChatMessages(
+    messages.map(message => ({
+      message_id: message.message_id,
+      data: _.omit(message.data, STATE_PATH_PREFIX),
+    })),
+    { refresh: 'none' },
+  );
 }
 
 function getCurrentSnapshotContext(): Pick<CharacterStatesSnapshot, 'chat_id' | 'character_name'> {
@@ -144,7 +294,7 @@ export function createCharacterStatesSnapshot({
     producer: {
       name: '角色状态管理',
     },
-    states: getAllCharactersStates(),
+    states: getLatestCharacterStatesData(),
     ...(summarize ? { summarize } : {}),
   };
 }
@@ -270,20 +420,18 @@ export async function importCharacterStatesSnapshot(
   const shouldImportStates = stateCount > 0 || !snapshot.summarize;
 
   if (shouldImportStates) {
-    updateVariablesWith(
-      variables => {
-        if (mode === 'replace') {
-          _.set(variables, STATE_PATH_PREFIX, snapshot.states);
-          return variables;
-        }
+    const currentStates = getLatestCharacterStatesData();
+    const importedStates =
+      mode === 'replace' ? cloneCharacterStates(snapshot.states) : _.merge({}, currentStates, snapshot.states);
 
-        const currentStatesParseResult = CharacterStatesDataSchema.safeParse(_.get(variables, STATE_PATH_PREFIX, {}));
-        const currentStates = currentStatesParseResult.success ? currentStatesParseResult.data : {};
-        _.set(variables, STATE_PATH_PREFIX, _.merge({}, currentStates, snapshot.states));
-        return variables;
-      },
-      { type: VARIABLE_TYPE },
-    );
+    const latestMessage = getLatestAssistantMessage();
+    if (!latestMessage) {
+      syncChatVariablesFromStates(importedStates);
+      devLog('当前聊天尚无 assistant 消息，已将导入状态暂存到聊天变量，后续 assistant 楼层会写入快照');
+    } else {
+      await writeMessageStateSnapshot(latestMessage.message_id, importedStates);
+      syncChatVariablesFromStates(importedStates);
+    }
   }
 
   let summarizeMessageId: number | undefined;
@@ -316,63 +464,70 @@ export async function importCharacterStatesSnapshot(
 export function initializeStates(
   characterName: string,
   stateNames: string[],
-  initialValues?: Record<string, number>,
-): void {
-  const variableOption = { type: VARIABLE_TYPE };
-  const variables = getVariables(variableOption);
-
-  let hasChanges = false;
+  initialValues?: Record<string, CharacterStateValue>,
+  states: CharacterStatesData = getLatestCharacterStatesData(),
+): CharacterStatesData {
+  const nextStates = cloneCharacterStates(states);
   const initialized: string[] = [];
   const existing: string[] = [];
 
   stateNames.forEach(stateName => {
-    const statePath = getStatePath(characterName, stateName);
-    if (!_.has(variables, statePath)) {
-      // 如果提供了初始值映射且该状态有初始值，使用提供的初始值；否则使用 0
+    if (!_.has(nextStates, [characterName, stateName])) {
       const initialValue = initialValues?.[stateName] ?? 0;
       const source = initialValues?.[stateName] !== undefined ? '自定义初始值' : '默认值(0)';
-      _.set(variables, statePath, initialValue);
-      hasChanges = true;
-      initialized.push(`${statePath} = ${initialValue} (${source})`);
+      _.set(nextStates, [characterName, stateName], initialValue);
+      initialized.push(`${characterName}.${stateName} = ${initialValue} (${source})`);
     } else {
-      existing.push(statePath);
+      existing.push(`${characterName}.${stateName}`);
     }
   });
-
-  if (hasChanges) {
-    replaceVariables(variables, variableOption);
-  }
 
   if (initialized.length > 0) {
     devLog(`新初始化状态: ${initialized.join(', ')}`);
   }
   if (existing.length > 0) {
-    devLog(`已存在状态（已跳过）: ${existing.map(p => `${p} = ${_.get(variables, p)}`).join(', ')}`);
+    devLog(`已存在状态（已跳过）: ${existing.map(p => `${p} = ${_.get(nextStates, p)}`).join(', ')}`);
   }
+
+  return nextStates;
 }
 
-export function parseStateUpdates(
-  text: string,
-): Array<{ characterName: string; stateName: string; delta: number; oldValue: number; newValue: number }> {
+function parseSetValue(rawValue: string): CharacterStateValue | undefined {
+  const value = rawValue.trim();
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1);
+  }
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : undefined;
+}
+
+export function parseStateUpdates(text: string): Array<{
+  characterName: string;
+  stateName: string;
+  oldValue: CharacterStateValue;
+  newValue: CharacterStateValue;
+}> {
   const updates: Array<{
     characterName: string;
     stateName: string;
-    delta: number;
-    oldValue: number;
-    newValue: number;
+    oldValue: CharacterStateValue;
+    newValue: CharacterStateValue;
   }> = [];
-  const pattern = /_\.set\s*\(\s*(["'])([^"']+)\.([^"']+)\1\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)/gi;
+  const pattern = new RegExp(STATE_UPDATE_PATTERN_TEXT, 'gi');
+  const fullPattern = new RegExp(`^${STATE_UPDATE_PATTERN_TEXT}`, 'i');
   let match;
 
   while ((match = pattern.exec(text)) !== null) {
     const characterName = match[2].trim();
     const stateName = match[3].trim();
-    const oldValue = parseFloat(match[4]);
-    const newValue = parseFloat(match[5]);
+    const oldValue = parseSetValue(match[4]);
+    const newValue = parseSetValue(match[5]);
 
-    if (!isNaN(oldValue) && !isNaN(newValue)) {
-      const delta = newValue - oldValue;
-      updates.push({ characterName, stateName, delta, oldValue, newValue });
+    if (oldValue !== undefined && newValue !== undefined) {
+      updates.push({ characterName, stateName, oldValue, newValue });
     }
   }
 
@@ -393,7 +548,7 @@ export function parseStateUpdates(
   for (const startPos of allSetStarts) {
     if (startPos > lastMatchedEnd) {
       const afterStart = text.substring(startPos);
-      if (!afterStart.match(/^_\.set\s*\(\s*(["'])([^"']+)\.([^"']+)\1\s*,\s*[\d.]+\s*,\s*[\d.]+\s*\)/)) {
+      if (!fullPattern.test(afterStart)) {
         const charStateMatch = afterStart.match(/["']([^"']+)\.([^"']+)["']/);
         const identifier = charStateMatch ? `${charStateMatch[1]}.${charStateMatch[2]}` : '未知';
         devWarn(`检测到未闭合的 _.set() 表达式（可能是消息被截断）: ${identifier}。该表达式将被忽略。`);
@@ -405,34 +560,73 @@ export function parseStateUpdates(
   return updates;
 }
 
-export function applyStateUpdate(characterName: string, stateName: string, delta: number): void {
-  const variableOption = { type: VARIABLE_TYPE };
-  const variables = getVariables(variableOption);
-  const statePath = getStatePath(characterName, stateName);
-  const currentValue = _.get(variables, statePath, 0);
-  const newValue = currentValue + delta;
-  _.set(variables, statePath, newValue);
-  replaceVariables(variables, variableOption);
-  devLog(`状态更新: ${statePath} = ${currentValue} -> ${newValue} (delta: ${delta > 0 ? '+' : ''}${delta})`);
+export function stripStateUpdateCommandsFromText(text: string): string {
+  const stateUpdatePattern = new RegExp(STATE_UPDATE_PATTERN_TEXT, 'i');
+  return text
+    .split('\n')
+    .filter(line => !stateUpdatePattern.test(line))
+    .join('\n')
+    .trimEnd();
 }
 
-export function getCurrentStateValue(characterName: string, stateName: string): number {
-  const variableOption = { type: VARIABLE_TYPE };
-  const variables = getVariables(variableOption);
-  const statePath = getStatePath(characterName, stateName);
-  return _.get(variables, statePath, 0);
+export function applyStateUpdateToStates(
+  states: CharacterStatesData,
+  characterName: string,
+  stateName: string,
+  oldValue: CharacterStateValue,
+  newValue: CharacterStateValue,
+): CharacterStatesData {
+  const nextStates = cloneCharacterStates(states);
+  if (typeof oldValue === 'number' && typeof newValue === 'number') {
+    const currentValue = _.get(nextStates, [characterName, stateName], 0);
+    const numericCurrentValue = typeof currentValue === 'number' ? currentValue : 0;
+    _.set(nextStates, [characterName, stateName], numericCurrentValue + newValue - oldValue);
+  } else {
+    _.set(nextStates, [characterName, stateName], newValue);
+  }
+  return nextStates;
 }
 
-export function getStateObject(
-  stateValue: number,
-  ranges: Array<{ min: number; max: number; content: string }>,
-): { min: number; max: number; content: string } | null {
-  for (const range of ranges) {
-    if (stateValue >= range.min && stateValue <= range.max) {
-      return range;
+export function getCurrentStateValue(characterName: string, stateName: string): CharacterStateValue {
+  return _.get(getLatestCharacterStatesData(), [characterName, stateName], 0);
+}
+
+function getStateValueFromStates(
+  states: CharacterStatesData,
+  characterName: string,
+  stateName: string,
+): CharacterStateValue {
+  return _.get(states, [characterName, stateName], 0);
+}
+
+export function getStateBranch(stateValue: CharacterStateValue, ranges: StateBranch[]): StateBranch | null {
+  for (const branch of ranges) {
+    if (branch.value !== undefined && branch.value === stateValue) {
+      return branch;
+    }
+    if (
+      typeof stateValue === 'number' &&
+      branch.min !== undefined &&
+      branch.max !== undefined &&
+      stateValue >= branch.min &&
+      stateValue <= branch.max
+    ) {
+      return branch;
     }
   }
   return null;
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function escapeXmlText(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 export function parseAllStateDefinitionsFromPrompt(
@@ -440,7 +634,7 @@ export function parseAllStateDefinitionsFromPrompt(
   useYaml: boolean = false,
 ): Array<{
   characterName: string;
-  states: Array<{ name: string; ranges: Array<{ min: number; max: number; content: string }> }>;
+  states: StateDefinition[];
   tagContent: string; // 完整的标签内容，用于替换
 }> {
   const CHARACTER_STATES_TAG = /<character_states>([\s\S]*?)<\/character_states>/gi;
@@ -452,7 +646,7 @@ export function parseAllStateDefinitionsFromPrompt(
 
   const allDefinitions: Array<{
     characterName: string;
-    states: Array<{ name: string; ranges: Array<{ min: number; max: number; content: string }> }>;
+    states: StateDefinition[];
     tagContent: string;
   }> = [];
 
@@ -467,14 +661,7 @@ export function parseAllStateDefinitionsFromPrompt(
         name?: string;
         characters?: Array<{
           name: string;
-          states: Array<{
-            name: string;
-            ranges: Array<{
-              min: number;
-              max: number;
-              content: string;
-            }>;
-          }>;
+          states: StateDefinition[];
         }>;
       } = useYaml ? YAML.parse(content) : JSON.parse(content);
 
@@ -497,7 +684,7 @@ export function parseAllStateDefinitionsFromPrompt(
         });
       }
     } catch (error) {
-      console.error('解析状态定义失败:', error);
+      devWarn('解析状态定义失败:', error);
       continue;
     }
   }
@@ -506,16 +693,17 @@ export function parseAllStateDefinitionsFromPrompt(
 }
 
 /**
- * 把 <character_states> 标签替换为当前匹配区间的 content。
- * 跨区间转移时才会变化，区间内的数值波动不影响该文本。
+ * 把定义用 <character_states> 标签替换为当前匹配分支的 content。
+ * instruction 仅附在聊天尾部的当前状态信息中，这里不重复。
  */
 export function replaceCharacterStatesTagsInText(
   text: string,
   stateDefinitions: Array<{
     characterName: string;
-    states: Array<{ name: string; ranges: Array<{ min: number; max: number; content: string }> }>;
+    states: StateDefinition[];
     tagContent: string;
   }>,
+  states: CharacterStatesData = getLatestCharacterStatesData(),
 ): string {
   if (stateDefinitions.length === 0) {
     return text;
@@ -525,7 +713,7 @@ export function replaceCharacterStatesTagsInText(
     string,
     Array<{
       characterName: string;
-      states: Array<{ name: string; ranges: Array<{ min: number; max: number; content: string }> }>;
+      states: StateDefinition[];
     }>
   >();
 
@@ -544,18 +732,22 @@ export function replaceCharacterStatesTagsInText(
     const allStateContents: string[] = [];
     for (const char of characters) {
       char.states.forEach(stateDef => {
-        const stateValue = getCurrentStateValue(char.characterName, stateDef.name);
-        const stateObject = getStateObject(stateValue, stateDef.ranges);
-        if (stateObject) {
-          allStateContents.push(`${char.characterName}.${stateDef.name}:\n${stateObject.content}`);
+        const stateValue = getStateValueFromStates(states, char.characterName, stateDef.name);
+        const stateBranch = getStateBranch(stateValue, stateDef.ranges);
+        if (stateBranch) {
+          const stateName = escapeXmlAttribute(`${char.characterName}.${stateDef.name}`);
+          const contentText = stateBranch.content.trim();
+          allStateContents.push(
+            contentText ? `<state name="${stateName}">\n${escapeXmlText(contentText)}\n</state>` : `<state name="${stateName}" />`,
+          );
         }
       });
     }
 
     const replacement =
       allStateContents.length > 0
-        ? `<character_states>\n${allStateContents.join('\n\n')}\n</character_states>`
-        : '<character_states>\n</character_states>';
+        ? `<character_states type="content">\n${allStateContents.join('\n')}\n</character_states>`
+        : '<character_states type="content">\n</character_states>';
     result = result.replace(tagContent, replacement);
   }
 
@@ -563,57 +755,71 @@ export function replaceCharacterStatesTagsInText(
 }
 
 /**
- * 构造"当前角色状态"文本（值 + 边界），用于在聊天末端追加为一条 system 消息。
+ * 构造当前角色状态 XML 块（更新格式 + 值 + 边界 + 当前分支指南），用于在聊天末端追加为一条 system 消息。
  * content 已由 replaceCharacterStatesTagsInText 在前缀输出，此处不重复。
  */
 export function buildCurrentStatesText(
   stateDefinitions: Array<{
     characterName: string;
-    states: Array<{ name: string; ranges: Array<{ min: number; max: number; content: string }> }>;
+    states: StateDefinition[];
   }>,
+  states: CharacterStatesData = getLatestCharacterStatesData(),
 ): string | null {
   if (stateDefinitions.length === 0) {
     return null;
   }
 
-  const allStateTexts: string[] = [];
+  const stateEntries: string[] = [];
   const processedChars = new Set<string>();
   for (const def of stateDefinitions) {
     if (processedChars.has(def.characterName)) continue;
     processedChars.add(def.characterName);
 
     for (const stateDef of def.states) {
-      const stateValue = getCurrentStateValue(def.characterName, stateDef.name);
-      if (stateDef.ranges.length > 0) {
-        const globalMin = Math.min(...stateDef.ranges.map(r => r.min));
-        const globalMax = Math.max(...stateDef.ranges.map(r => r.max));
-        allStateTexts.push(
-          `${def.characterName}.${stateDef.name} = ${stateValue}（min=${globalMin} max=${globalMax}）`,
-        );
-      } else {
-        allStateTexts.push(`${def.characterName}.${stateDef.name} = ${stateValue}`);
+      const stateValue = getStateValueFromStates(states, def.characterName, stateDef.name);
+      const stateBranch = getStateBranch(stateValue, stateDef.ranges);
+      const rangeBranches = stateDef.ranges.filter(branch => branch.min !== undefined && branch.max !== undefined);
+      const valueText = String(stateValue);
+      const instructionText = stateBranch?.instruction?.trim();
+      const attrs = [
+        `name="${escapeXmlAttribute(`${def.characterName}.${stateDef.name}`)}"`,
+        `value="${escapeXmlAttribute(valueText)}"`,
+      ];
+
+      if (rangeBranches.length > 0 && typeof stateValue === 'number') {
+        const globalMin = Math.min(...rangeBranches.map(r => r.min!));
+        const globalMax = Math.max(...rangeBranches.map(r => r.max!));
+        attrs.push(`min="${globalMin}"`, `max="${globalMax}"`);
       }
+
+      stateEntries.push(
+        instructionText
+          ? `<instruction ${attrs.join(' ')}>\n${escapeXmlText(instructionText)}\n</instruction>`
+          : `<instruction ${attrs.join(' ')} />`,
+      );
     }
   }
 
-  if (allStateTexts.length === 0) {
+  if (stateEntries.length === 0) {
     return null;
   }
-  return `[角色状态: ${allStateTexts.join(', ')}]`;
+
+  const updateFormatEntry = `<update_format>\n${escapeXmlText(STATE_UPDATE_FORMAT_TEXT)}\n</update_format>`;
+  return `<character_states type="current">\n${[updateFormatEntry, ...stateEntries].join('\n')}\n</character_states>`;
 }
 
 export function getAllStatesDisplay(
   characterName: string,
-  stateDefinitions: Array<{ name: string; ranges: Array<{ min: number; max: number; content: string }> }>,
-): Array<{ name: string; value: number; content: string | null }> {
+  stateDefinitions: StateDefinition[],
+): Array<{ name: string; value: CharacterStateValue; content: string | null }> {
   return stateDefinitions.map(stateDef => {
     const stateValue = getCurrentStateValue(characterName, stateDef.name);
-    const stateObject = getStateObject(stateValue, stateDef.ranges);
-    if (stateObject) {
+    const stateBranch = getStateBranch(stateValue, stateDef.ranges);
+    if (stateBranch) {
       return {
         name: stateDef.name,
         value: stateValue,
-        content: stateObject.content,
+        content: stateBranch.content,
       };
     }
     return {
@@ -624,11 +830,9 @@ export function getAllStatesDisplay(
   });
 }
 
-export function getAllCharactersStates(): Record<string, Record<string, number>> {
-  const variableOption = { type: VARIABLE_TYPE };
-  const variables = getVariables(variableOption);
-  const characterStates: Record<string, Record<string, number>> = {};
-  const statesData = _.get(variables, STATE_PATH_PREFIX);
+export function getAllCharactersStates(): Record<string, Record<string, CharacterStateValue>> {
+  const characterStates: Record<string, Record<string, CharacterStateValue>> = {};
+  const statesData = getLatestCharacterStatesData();
   if (!statesData || typeof statesData !== 'object') {
     return characterStates;
   }
@@ -636,10 +840,10 @@ export function getAllCharactersStates(): Record<string, Record<string, number>>
   for (const characterName in statesData) {
     const characterData = statesData[characterName];
     if (characterData && typeof characterData === 'object') {
-      const states: Record<string, number> = {};
+      const states: Record<string, CharacterStateValue> = {};
       for (const stateName in characterData) {
         const value = characterData[stateName];
-        if (typeof value === 'number') {
+        if (['number', 'string', 'boolean'].includes(typeof value)) {
           states[stateName] = value;
         }
       }
@@ -653,28 +857,15 @@ export function getAllCharactersStates(): Record<string, Record<string, number>>
 }
 
 /**
- * 从所有 assistant 消息的 <character_states_init> 标签中提取所有角色的状态初始值
- * 这是本次新增功能的自定义初始化值内容，只解析标签内的 _.set 语句
- *
- * 统一逻辑：以 0 为基准，使用差值 delta = newValue - oldValue 作为初始值
- * 这样与状态更新逻辑保持一致（都是基于差值）
- *
- * 示例：
- * - _.set("角色.状态", 0, 50) → delta = 50，初始值 = 50
- * - _.set("角色.状态", 10, 50) → delta = 40，初始值 = 40
- *
- * @param chat 消息数组
- * @returns 按角色分组的初始值映射，key 为角色名称，value 为该角色的状态初始值映射
+ * 从 <character_states_init> 标签收集尚不存在状态的初始值。
+ * 数值状态使用 delta = newValue - oldValue，离散状态直接使用 newValue。
  */
 export function getAllInitialValuesFromInitTag(
   chat: SillyTavern.SendingMessage[],
-): Record<string, Record<string, number>> {
-  const variableOption = { type: VARIABLE_TYPE };
-  const variables = getVariables(variableOption);
-
-  // 1. 扫描所有 assistant 消息，查找 <character_states_init> 标签
+  states: CharacterStatesData = getLatestCharacterStatesData(),
+): Record<string, Record<string, CharacterStateValue>> {
   const CHARACTER_STATES_INIT_TAG = /<character_states_init>([\s\S]*?)<\/character_states_init>/gi;
-  const allUpdates: Array<{ characterName: string; stateName: string; delta: number }> = [];
+  const allUpdates: Array<{ characterName: string; stateName: string; value: CharacterStateValue }> = [];
 
   for (const message of chat) {
     if (message.role !== 'assistant' || !message.content) {
@@ -698,50 +889,39 @@ export function getAllInitialValuesFromInitTag(
       continue;
     }
 
-    // 查找 <character_states_init> 标签
     const matches = [...contentText.matchAll(CHARACTER_STATES_INIT_TAG)];
     if (matches.length === 0) {
       continue;
     }
 
-    devLog(`在 assistant 消息中找到 ${matches.length} 个 <character_states_init> 标签`);
-
     for (const match of matches) {
       const tagContent = match[1].trim();
       if (!tagContent) continue;
 
-      // 解析标签内的 _.set 语句
       const updates = parseStateUpdates(tagContent);
-      devLog(`从 <character_states_init> 标签中解析到 ${updates.length} 个 _.set 语句`);
 
       for (const update of updates) {
-        const statePath = getStatePath(update.characterName, update.stateName);
-        // 只收集不存在的状态（需要初始化的状态）
-        if (!_.has(variables, statePath)) {
+        if (!_.has(states, [update.characterName, update.stateName])) {
           allUpdates.push({
             characterName: update.characterName,
             stateName: update.stateName,
-            delta: update.delta,
+            value:
+              typeof update.oldValue === 'number' && typeof update.newValue === 'number'
+                ? update.newValue - update.oldValue
+                : update.newValue,
           });
-          devLog(
-            `收集初始值: ${update.characterName}.${update.stateName} = ${update.delta} (delta = ${update.newValue} - ${update.oldValue})`,
-          );
-        } else {
-          devLog(`跳过已存在的状态: ${update.characterName}.${update.stateName}`);
         }
       }
     }
   }
 
-  // 2. 按角色分组
-  const result: Record<string, Record<string, number>> = {};
+  const result: Record<string, Record<string, CharacterStateValue>> = {};
   for (const update of allUpdates) {
     if (!result[update.characterName]) {
       result[update.characterName] = {};
     }
-    // 如果同一个状态有多个更新，使用第一个（按出现顺序）
-    if (!result[update.characterName][update.stateName]) {
-      result[update.characterName][update.stateName] = update.delta;
+    if (result[update.characterName][update.stateName] === undefined) {
+      result[update.characterName][update.stateName] = update.value;
     }
   }
 
